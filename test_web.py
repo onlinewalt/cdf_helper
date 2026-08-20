@@ -21,6 +21,10 @@ srcs = [Path(f) for f in (glob.glob("*.xls") or sorted(glob.glob("uploads/*.xlsx
 # drop the "-<hex>" duplicate copies that earlier uploads created, and any uploaded template copy
 srcs = [f for f in srcs if not re.search(r"-[0-9a-f]{6}(?=\.(?:xls|xlsx)$)", f.name)]
 srcs = [f for f in srcs if "模板" not in f.name]
+srcs = [f for f in srcs if "船名" not in f.name]  # the 中英文船名 lookup is not a source
+if not srcs:
+    print("SKIP: no source files present (uploads/ empty)")
+    sys.exit(0)
 src_values = [os.path.relpath(s) for s in srcs]  # e.g. "uploads/xx.xls" or "xx.xls"
 
 client = app.test_client()

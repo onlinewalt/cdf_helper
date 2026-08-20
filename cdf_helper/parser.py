@@ -16,6 +16,7 @@ Both .xlsx (openpyxl) and legacy .xls (xlrd) files are supported.
 """
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -520,3 +521,194 @@ def detect_vessel(paths) -> Optional[str]:
                     if clean:
                         return clean
     return None
+
+
+# ---- bilingual vessel name (中英文船名对照表) ----------------------------
+
+_CJK = re.compile(r"[\u4e00-\u9fff]+")
+
+# traditional -> simplified characters commonly found in ship/port/city names
+_T2S = {
+    "遠": "远", "偉": "伟", "衛": "卫", "萬": "万", "東": "东", "蘭": "兰",
+    "灣": "湾", "馬": "马", "學": "学", "華": "华", "電": "电", "機": "机",
+    "艦": "舰", "號": "号", "長": "长", "陽": "阳", "亞": "亚", "歐": "欧",
+    "廣": "广", "國": "国", "紐": "纽", "約": "约", "倫": "伦", "漢": "汉",
+    "羅": "罗", "維": "维", "爾": "尔", "澤": "泽", "內": "内", "園": "园",
+    "豐": "丰", "匯": "汇", "駿": "骏", "鵬": "鹏", "龍": "龙", "麗": "丽",
+    "書": "书", "畫": "画", "廠": "厂", "場": "场", "館": "馆", "樓": "楼",
+    "標": "标", "樣": "样", "權": "权", "歡": "欢", "橋": "桥", "蘇": "苏",
+    "薩": "萨", "賓": "宾", "賽": "赛", "貝": "贝", "貨": "货", "車": "车",
+    "輪": "轮", "軸": "轴", "銅": "铜", "鋼": "钢", "鐵": "铁", "鈴": "铃",
+    "銀": "银", "鏈": "链", "鐘": "钟", "燈": "灯", "點": "点", "熱": "热",
+    "愛": "爱", "樂": "乐", "興": "兴", "舊": "旧", "與": "与", "從": "从",
+    "後": "后", "來": "来", "見": "见", "現": "现", "視": "视", "親": "亲",
+    "覺": "觉", "觀": "观", "規": "规", "則": "则", "製": "制", "複": "复",
+    "烏": "乌", "聖": "圣", "塞": "塞", "納": "纳", "島": "岛", "嶼": "屿",
+    "鎮": "镇", "瀋": "沈", "連": "连", "臺": "台", "廈": "厦", "門": "门",
+    "煙": "烟", "瓊": "琼", "濱": "滨", "寧": "宁", "溫": "温", "營": "营",
+    "蘆": "芦", "錦": "锦", "雲": "云", "黃": "黄", "鹽": "盐", "鏟": "铲",
+    "蓮": "莲", "綠": "绿", "極": "极", "紅": "红", "裏": "里", "幾": "几",
+    "遜": "逊", "萊": "莱", "雙": "双", "蠍": "蝎", "獅": "狮", "寶": "宝",
+    "魚": "鱼", "鵑": "鹃", "楊": "杨", "櫻": "樱", "櫚": "榈", "膠": "胶",
+    "楓": "枫", "樺": "桦", "腦": "脑", "樸": "朴", "檸": "柠", "蘋": "苹",
+    "藍": "蓝", "無": "无", "欖": "榄", "霧": "雾", "龍": "龙", "菠": "菠",
+    "蘿": "萝", "絲": "丝", "蔥": "葱", "薑": "姜", "歸": "归", "參": "参",
+    "棗": "枣", "翹": "翘", "葉": "叶", "蟲": "虫", "靈": "灵", "窩": "窝",
+    "鮑": "鲍", "蝦": "虾", "裝": "装", "紙": "纸", "織": "织", "滌": "涤",
+    "綸": "纶", "襪": "袜", "褲": "裤", "襯": "衬", "夾": "夹", "傘": "伞",
+    "櫃": "柜", "鋪": "铺", "蓋": "盖", "單": "单", "簾": "帘", "發": "发",
+    "櫥": "橱", "凍": "冻", "飯": "饭", "壺": "壶", "盤": "盘", "鉗": "钳",
+    "錘": "锤", "鑿": "凿", "鋸": "锯", "鉋": "刨", "銼": "锉", "鋁": "铝",
+    "鉛": "铅", "鋅": "锌", "錫": "锡", "鎳": "镍", "鉻": "铬", "鈦": "钛",
+    "鎂": "镁", "鎢": "钨", "鉬": "钼", "釩": "钒", "錳": "锰", "鈷": "钴",
+    "鉑": "铂", "氫": "氢", "氬": "氩", "鈉": "钠", "鉀": "钾", "鈣": "钙",
+    "鋰": "锂", "鈹": "铍", "釔": "钇", "鋯": "锆", "鈮": "铌", "鍀": "锝",
+    "釕": "钌", "銠": "铑", "鈀": "钯", "鎘": "镉", "銦": "铟", "銻": "锑",
+    "鍶": "锶", "銣": "铷", "銫": "铯", "鋇": "钡", "鑭": "镧", "鈰": "铈",
+    "鐠": "镨", "釹": "钕", "釤": "钐", "銪": "铕", "鋱": "铽", "鏑": "镝",
+    "鉺": "铒", "銩": "铥", "鐿": "镱", "鑥": "镥", "鉿": "铪", "鉭": "钽",
+    "錸": "铼", "鋨": "锇", "銥": "铱", "鉍": "铋", "釙": "钋", "鈁": "钫",
+    "鐳": "镭", "錒": "锕", "釷": "钍", "鏷": "镤", "鈾": "铀", "鎿": "镎",
+    "鈽": "钚", "鋂": "镅", "鋦": "锔", "鉳": "锫", "鉲": "锎", "鎄": "锿",
+    "鐨": "镄", "鍆": "钔", "鍩": "锘", "鐒": "铹", "鑪": "𬬻", "𨧀": "𬭊",
+    "𨭎": "𬭳", "𨨏": "𬭛", "𨭆": "𬭶", "錀": "𬬭", "鎶": "鿔", "鉨": "鿭",
+    "鈇": "𫓧", "鏌": "镆", "鉝": "𫟷",
+}
+
+
+def _zh_key(s: str) -> str:
+    """Normalize a Chinese name: fullwidth->halfwidth, strip spaces, trad->simplified."""
+    s = unicodedata.normalize("NFKC", str(s)).replace(" ", "").replace("\u3000", "")
+    return "".join(_T2S.get(ch, ch) for ch in s)
+
+
+def _en_key(s: str) -> str:
+    """Normalize an English/romanized name: uppercase, keep letters/digits only."""
+    return re.sub(r"[^A-Z0-9]", "", str(s).upper())
+
+
+def _split_zh_en(val: str):
+    """Split a vessel value like 'COSMERRY LAKE(遠怡湖)' or '远怡湖COSMERRY LAKE' into (chinese, english)."""
+    val = str(val).strip().lstrip(":")
+    m = re.search(r"[（(]([^）)]*)[)）]", val)
+    zh = None
+    if m and re.search(r"[\u4e00-\u9fff]", m.group(1)):
+        zh = m.group(1).strip()
+        val = (val[: m.start()] + val[m.end():]).strip()
+    else:
+        m = re.search(_CJK, val)
+        if m:
+            zh = m.group(0).strip()
+            val = (val[: m.start()] + val[m.end():]).strip()
+    en = val.strip().strip(": ")
+    if zh is None and not en:
+        return None, None
+    return zh, en or None
+
+
+def detect_vessel_pair(paths):
+    """Return (chinese, english) vessel names found in the sources, or (None, None)."""
+    for p in paths:
+        p = Path(p)
+        try:
+            sheets = _open_sheets(p)
+        except Exception:
+            continue
+        for sheet in sheets:
+            for row in sheet.iter_rows():
+                texts = [str(c.value).strip() for c in row if c.value is not None]
+                joined = " ".join(texts)
+
+                m = re.search(r"船名\s*[:：]\s*(\S+)", joined)
+                if m:
+                    zh, en = _split_zh_en(m.group(1))
+                    if zh or en:
+                        return zh, en
+
+                for i, t in enumerate(texts):
+                    if "船名/单位" in t or "船名／单位" in t:
+                        for other in texts[i + 1:]:
+                            if other:
+                                return _split_zh_en(other)
+                        break
+
+                for i, t in enumerate(texts):
+                    if "vessel name" not in t.lower():
+                        continue
+                    m = re.search(r"[Vv]essel\s+[Nn]ame\s*[:：]?\s*(.*)", t)
+                    val = (m.group(1) if m else "").strip()
+                    if not val:
+                        for other in texts[i + 1:]:
+                            if not other.lstrip(":"):
+                                continue
+                            res = _split_zh_en(other.lstrip(":"))
+                            if res[0] or res[1]:
+                                return res
+                        continue
+                    res = _split_zh_en(val)
+                    if res[0] or res[1]:
+                        return res
+    return None, None
+
+
+def load_vessel_names(path):
+    """Load the 中英文船名 lookup workbook -> (zh2en, en2zh) name mappings."""
+    path = Path(path)
+    zh2en, en2zh = {}, {}
+    for sheet in _open_sheets(path):
+        rows = list(sheet.iter_rows())
+        if not rows:
+            continue
+        header = rows[0]
+        pair_cols = []
+        for c in header:
+            h = _clean(c.value)
+            if not h or ("中文" not in h and h != "船名"):
+                continue
+            for c2 in header:
+                if c2.column <= c.column:
+                    continue
+                h2 = _clean(c2.value)
+                if not h2:
+                    continue
+                if "英文" in h2 or "拼音" in h2:
+                    pair_cols.append((c.column, c2.column))
+                    break
+        for r in rows[1:]:
+            for cn_col, en_col in pair_cols:
+                cn = _cell_in_row(r, cn_col)
+                en = _cell_in_row(r, en_col)
+                if cn and en:
+                    zh2en.setdefault(_zh_key(cn), _clean(en))
+                    en2zh.setdefault(_en_key(en), _zh_key(cn))
+    return zh2en, en2zh
+
+
+def _cell_in_row(row, col):
+    for c in row:
+        if c.column == col:
+            return _clean(c.value)
+    return None
+
+
+def bilingual_vessel(vessel, zh2en, en2zh, english=None, chinese=None):
+    """Return a '中文 英文' string when the vessel can be resolved via the lookup table.
+
+    If an English name was read from the source it is matched against the lookup
+    first (handles traditional/simplified Chinese differences). Otherwise the
+    Chinese name is matched (with a light traditional->simplified conversion).
+    Unresolvable names are returned unchanged.
+    """
+    if english:
+        en_key = _en_key(english)
+        if en_key in en2zh:
+            zh = en2zh[en_key]
+            en = zh2en.get(zh, _clean(english))
+            return f"{zh} {en}"
+        zh = _clean(chinese or vessel or "")
+        return f"{zh} {_clean(english)}".strip()
+    zh = _clean(chinese or vessel or "")
+    key = _zh_key(zh)
+    if key in zh2en:
+        return f"{key} {zh2en[key]}"
+    return zh.strip()

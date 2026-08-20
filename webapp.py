@@ -15,7 +15,13 @@ from flask import Flask, abort, flash, redirect, render_template, request, send_
 from cdf_helper import config as app_config
 from cdf_helper.ai import enrich_parts
 from cdf_helper.generator import generate, sanitize_filename
-from cdf_helper.parser import parse_sources, detect_vessel
+from cdf_helper.parser import (
+    parse_sources,
+    detect_vessel,
+    detect_vessel_pair,
+    load_vessel_names,
+    bilingual_vessel,
+)
 
 REPORT_LABEL = "报关清单"
 BASE_DIR = Path(__file__).resolve().parent
@@ -54,10 +60,30 @@ def _spreadsheets_in(directory):
 
 
 def _server_source_files():
-    """Source candidates: spreadsheets in the project root, excluding the template & outputs."""
+    """Source candidates: spreadsheets in the project root, excluding the template, outputs & the 船名 lookup."""
     files = _spreadsheets_in(BASE_DIR)
     template = _server_template_file()
-    return [f for f in files if f != template and f.parent == BASE_DIR]
+    lookup = _server_vessel_lookup()
+    return [f for f in files if f != template and f != lookup and f.parent == BASE_DIR]
+
+
+def _server_vessel_lookup():
+    """The 中英文船名 lookup workbook in the project root (name contains '船名'), or None."""
+    for f in _spreadsheets_in(BASE_DIR):
+        if f.parent == BASE_DIR and "船名" in f.name:
+            return f
+    return None
+
+
+def _server_vessel_names():
+    """Load (zh2en, en2zh) from the lookup workbook, falling back to empty dicts."""
+    lookup = _server_vessel_lookup()
+    if lookup is None:
+        return {}, {}
+    try:
+        return load_vessel_names(lookup)
+    except Exception:
+        return {}, {}
 
 
 def _server_template_file():
@@ -138,8 +164,14 @@ def do_generate():
         return redirect(url_for("index"))
 
     vessel = request.form.get("vessel", "").strip()
+    chinese, english = (None, None)
     if not vessel:
-        vessel = detect_vessel(sources) or ""
+        chinese, english = detect_vessel_pair(sources)
+        if chinese is None and english is None:
+            vessel = detect_vessel(sources) or ""
+    if vessel or chinese or english:
+        zh2en, en2zh = _server_vessel_names()
+        vessel = bilingual_vessel(vessel, zh2en, en2zh, english=english, chinese=chinese)
     port = request.form.get("port", "").strip()
     date = request.form.get("date", "").strip() or datetime.date.today().isoformat()
     include_spec = request.form.get("include_spec") == "on"

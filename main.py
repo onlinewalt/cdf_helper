@@ -15,7 +15,13 @@ import webbrowser
 from pathlib import Path
 
 from cdf_helper.generator import generate, sanitize_filename
-from cdf_helper.parser import parse_sources, detect_vessel
+from cdf_helper.parser import (
+    parse_sources,
+    detect_vessel,
+    detect_vessel_pair,
+    load_vessel_names,
+    bilingual_vessel,
+)
 
 
 def _ensure_utf8_stdio():
@@ -57,9 +63,15 @@ def _ask(question, default):
 
 
 def _discover_files():
-    """List spreadsheet files in cwd, excluding generated CDF outputs."""
+    """List spreadsheet files in cwd, excluding generated CDF outputs & the 船名 lookup."""
     files = sorted(Path.cwd().glob("*.xls*"))
-    return [f for f in files if not f.name.endswith("报关清单.xlsx") and "output" not in f.parts]
+    return [
+        f
+        for f in files
+        if not f.name.endswith("报关清单.xlsx")
+        and "船名" not in f.name
+        and "output" not in f.parts
+    ]
 
 
 def _pick_template():
@@ -181,8 +193,20 @@ def main(argv=None):
     print(f"共解析到 {len(parts)} 条备件。")
 
     vessel = args.vessel or detect_vessel(sources)
+    chinese, english = (None, None)
+    if not vessel:
+        chinese, english = detect_vessel_pair(sources)
+        if chinese is None and english is None:
+            vessel = detect_vessel(sources) or ""
     if not vessel:
         vessel = _ask("请输入船名", None)
+    if vessel or chinese or english:
+        lookup = Path.cwd() / "中英文船名25-5-14.xls"
+        try:
+            zh2en, en2zh = load_vessel_names(lookup) if lookup.is_file() else ({}, {})
+        except Exception:
+            zh2en, en2zh = {}, {}
+        vessel = bilingual_vessel(vessel, zh2en, en2zh, english=english, chinese=chinese)
 
     port = args.port or _ask("请输入目的港", "")
     date = args.date or _ask("请输入日期", datetime.date.today().isoformat())

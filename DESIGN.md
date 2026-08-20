@@ -80,6 +80,8 @@ D:\CDF_helper\
 - **英文 Receipt/Packing List**（如远通海事，表头含 `Item/Quantity(Unit)/Particulars` 或 `Description`，或仅 `Item/Quantity(Unit)`，数量形如 `N PCE`，以 `** End of Listing **` 结尾）：表头行内找不到 `name+qty` 时自动回退到 `_parse_packing_sheet` 启发式解析——按行抓数量（`_QTY_RE`，仅识别英文单位，避免中文描述如"每条总长11米"误判）、从同行/后续行收集名称与 `Type:` 规格，直至下一数量行或清单末尾；`Part No / Serial No / Dwg.*` 列按表头标注自动排除，不混入名称；缺名称的条目记占位符 `(未填写名称)` 并告警；签名/网址/分隔线等页脚碎片会被 `_trim_footer`/`_clean_name` 剔除。
 - 中文签收单/清单：数据区中 `签字/签收/盖章/供船` 等签名行或页脚文件名会被跳过，不会当成备件。
 - `detect_vessel(paths)`：逐行匹配 `船名[:：]xxx`、`船名/单位` 右邻单元格、或 `Vessel Name` 行（含跨格值，优先取括号内中文船名）。
+- **中英文船名对照表**：根目录 `中英文船名25-5-14.xls` 的 sheet 内按列对排列 `中文船名：/英文名：`（含 `英文名是拼音：` 列）。`load_vessel_names` 解析出 `(zh2en, en2zh)` 双向映射；`detect_vessel_pair` 从来源返回 `(chinese, english)`（`Vessel Name` 等行的 `COSMERRY LAKE(遠怡湖)` 或 `船名` 行拆中英文）；`bilingual_vessel` 合成 `中文 英文`（优先用英文名反查，规避来源繁体 vs 对照表简体的差异，`_zh_key` 做轻量繁→简转换）。
+- 生成入口（webapp / main）在船名为空时先 `detect_vessel_pair`，再无结果回退 `detect_vessel`；识别到的船名一律经 `bilingual_vessel` 富化为 `中文 英文`（对照表内未收录则保持原样）。该对照表文件不会被当作备件来源/模板候选。
 - 数据模型：
 
 ```python

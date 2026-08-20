@@ -9,7 +9,14 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from openpyxl import Workbook
 
-from cdf_helper.parser import parse_source, detect_vessel, parse_sources
+from cdf_helper.parser import (
+    parse_source,
+    parse_sources,
+    detect_vessel,
+    detect_vessel_pair,
+    load_vessel_names,
+    bilingual_vessel,
+)
 
 
 def _write_workbook(path: Path):
@@ -91,6 +98,29 @@ def test_synthetic():
         assert p6.qty == 4 and p6.type == "07.02.01.063"
 
         assert detect_vessel([path]) == "测试船"
+        assert detect_vessel_pair([path]) == ("测试船", "VESSEL-A")
+
+
+def test_vessel_lookup():
+    lookup = Path("中英文船名25-5-14.xls")
+    if not lookup.exists():
+        print("SKIP: 中英文船名 lookup not present")
+        return
+    zh2en, en2zh = load_vessel_names(lookup)
+    assert len(zh2en) == len(en2zh) > 100
+    assert zh2en["远怡湖"] == "COSMERRY LAKE"
+    assert zh2en["中远安特卫普"] == "COSCO ANTWERP"
+    assert en2zh["COSMERRYLAKE"] == "远怡湖"
+    assert en2zh["COSCOANTWERP"] == "中远安特卫普"
+
+    # English match handles traditional/simplified differences in the source
+    assert bilingual_vessel("中遠安特偉普", zh2en, en2zh, english="coscO ANTWERP", chinese="中遠安特偉普") == "中远安特卫普 COSCO ANTWERP"
+    assert bilingual_vessel("遠怡湖", zh2en, en2zh, english="cOSMERRY LAKE", chinese="遠怡湖") == "远怡湖 COSMERRY LAKE"
+    # Chinese-only match through the lookup (typed forms)
+    assert bilingual_vessel("远怡湖", zh2en, en2zh) == "远怡湖 COSMERRY LAKE"
+    assert bilingual_vessel("遠怡湖", zh2en, en2zh) == "远怡湖 COSMERRY LAKE"
+    # unresolvable -> unchanged
+    assert bilingual_vessel("测试船", zh2en, en2zh) == "测试船"
 
 
 def test_real_file_if_present():
