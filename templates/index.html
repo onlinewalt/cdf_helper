@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CDF Helper - 报关清单生成器</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>CDF Helper · 报关清单生成器</h1>
+            <p class="subtitle">根据备件来源 Excel，自动生成报关清单</p>
+        </header>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, msg in messages %}
+                <div class="flash flash-{{ category }}">{{ msg }}</div>
+            {% endfor %}
+        {% endwith %}
+
+        <form method="post" action="{{ url_for('do_generate') }}" enctype="multipart/form-data">
+            <section>
+                <h2>1. 模板文件</h2>
+                <label class="opt-label">
+                    <span>从服务器已有文件选择：</span>
+                    <select name="template_path">
+                        {% if server_template %}
+                            <option value="{{ server_template.name }}" selected>{{ server_template.name }}</option>
+                        {% endif %}
+                        {% for f in template_candidates %}
+                            {% if f != server_template %}
+                                <option value="{{ f.name }}">{{ f.name }}</option>
+                            {% endif %}
+                        {% endfor %}
+                    </select>
+                </label>
+                <label class="opt-label">
+                    <span>或上传新模板 (.xlsx)：</span>
+                    <input type="file" name="template_upload" accept=".xlsx">
+                </label>
+            </section>
+
+            <section>
+                <h2>2. 备件来源文件</h2>
+                <label class="opt-label">
+                    <span>上传来源文件（可多选，支持 .xls / .xlsx）：</span>
+                    <input type="file" name="sources_upload" multiple accept=".xls,.xlsx">
+                </label>
+                <div class="opt-label">
+                    <span>或从服务器已有文件选择：</span>
+                    <div class="check-grid">
+                        {% for f in source_candidates %}
+                            <label class="check-item">
+                                <input type="checkbox" name="source_paths" value="{{ f.name }}"> {{ f.name }}
+                            </label>
+                        {% else %}
+                            <span class="muted">服务器上没有其他备件来源文件。</span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </section>
+
+            <section>
+                <h2>3. 清单信息</h2>
+                <div class="field">
+                    <label for="vessel">船名（留空则自动识别）：</label>
+                    <input type="text" id="vessel" name="vessel" placeholder="例如 人马座">
+                </div>
+                <div class="field">
+                    <label for="port">目的港：</label>
+                    <input type="text" id="port" name="port" placeholder="例如 上海">
+                </div>
+                <div class="field">
+                    <label for="date">日期：</label>
+                    <input type="date" id="date" name="date" value="{{ today }}">
+                </div>
+                <label class="check-line">
+                    <input type="checkbox" name="include_spec" checked>
+                    备件名称拼接规格 / 型号
+                </label>
+            </section>
+
+            <div class="actions">
+                <button type="submit" class="btn btn-primary">生成报关清单</button>
+            </div>
+        </form>
+    </div>
+</body>
+</html>

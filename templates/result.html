@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>生成完成 - CDF Helper</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>CDF Helper · 报关清单生成器</h1>
+            <p class="subtitle">生成结果</p>
+        </header>
+
+        <div class="card">
+            <h2 class="ok">清单已生成</h2>
+            <p><strong>文件名：</strong>{{ file_name }}</p>
+            <p><strong>船名：</strong>{{ vessel or '（未识别到）' }}　<strong>目的港：</strong>{{ port or '-' }}　<strong>日期：</strong>{{ date }}</p>
+            <p><strong>备件条数：</strong>{{ item_count }}</p>
+
+            {% if warnings %}
+                <div class="warnings">
+                    <h3>解析提示</h3>
+                    <ul>
+                        {% for w in warnings %}
+                            <li>{{ w }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
+
+            <div class="actions">
+                <a class="btn btn-primary" href="{{ url_for('download', file_name=file_name) }}">下载报关清单</a>
+                <a class="btn" href="{{ url_for('index') }}">再生成一份</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
