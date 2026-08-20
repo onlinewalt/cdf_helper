@@ -66,8 +66,7 @@ _CONTAINS_RULES = (
 # ---- packing-list (English Receipt/Packing List) patterns -------------
 _QTY_RE = re.compile(
     r"(?<!\d)(\d+(?:\.\d+)?)\s*"
-    r"(PCE|PCS|PC|SETS|SET|SHEET|PKT|MTR|PAIR|CASE|CAN|EA|BAG|ROLL|"
-    r"个|件|套|台|支|根|张|块|盒|米|只|片)(?!\w)",
+    r"(PCE|PCS|PC|SETS|SET|SHEET|PKT|MTR|PAIR|CASE|CAN|EA|BAG|ROLL|BIL)(?!\w)",
     re.IGNORECASE,
 )
 _END_RE = re.compile(r"end\s+of\s+listing", re.IGNORECASE)
@@ -127,10 +126,13 @@ def _clean(value) -> str:
 
 
 def _clean_name(text: str) -> str:
-    """Drop pure-number / stray-unit tokens (item numbers, leftover qty units) from a name fragment."""
+    """Drop pure-number / stray-unit / separator tokens from a name fragment."""
     tokens = []
     for t in text.split():
+        t = t.strip(":：")
         if re.fullmatch(r"[\d.,\-]+", t):
+            continue
+        if re.fullmatch(r"[=\-*]+", t):
             continue
         if t.upper() in _UNIT_WORDS:
             continue
@@ -149,6 +151,10 @@ def _split_type(text: str):
 
 
 def _is_irrelevant(text: str) -> bool:
+    if text.startswith(":") or text.endswith(":"):
+        return True
+    if re.match(r"dwg\.?", text, re.IGNORECASE):
+        return True
     if re.fullmatch(r"[\d.,\-()（）\s]+", text):
         return True
     return bool(_IRRELEVANT_RE.match(text))
@@ -250,6 +256,13 @@ def _find_header_row(sheet):
     return None, None
 
 
+_SIGNATURE_KEYWORDS = ("签字", "签收", "盖章", "供船", "签收日期")
+
+
+def _is_signature(text: str) -> bool:
+    return any(k in text for k in _SIGNATURE_KEYWORDS)
+
+
 def _parse_standard(sheet, mapping, header_row, path, warn) -> list:
     name_col = mapping["name"]
     qty_col = mapping["qty"]
@@ -267,6 +280,8 @@ def _parse_standard(sheet, mapping, header_row, path, warn) -> list:
         name = _to_text(cells[name_col - 1].value)
         if name is None:
             continue
+        if _is_signature(name):
+            continue  # signature / footer rows must not become parts
         qty = _to_number(cells[qty_col - 1].value)
         if qty is None:
             if warn:
@@ -289,19 +304,38 @@ def _parse_standard(sheet, mapping, header_row, path, warn) -> list:
 # ---- packing-list (English Receipt/Packing List) parsing --------------
 
 def _find_packing_header(sheet):
-    """Return the 1-based row index of the Item/Quantity/Particulars header, or None."""
+    """Return (header_row, exclude_cols).
+
+    A packing header is a row containing both "item" and "quantity" (the
+    particulars/description label may be missing or named "Description").
+    Columns labelled Part No / Serial No / Dwg.* are metadata and excluded
+    from name extraction.
+    """
     for cells in sheet.iter_rows():
-        text = " ".join(_clean(c.value) for c in cells if c.value is not None).lower()
-        if "item" in text and "quantity" in text and "particular" in text:
-            return cells[0].row
-    return None
+        texts = [_clean(c.value) for c in cells if c.value is not None]
+        joined = " ".join(texts).lower()
+        if "item" not in joined or "quantity" not in joined:
+            continue
+        exclude = set()
+        for c in cells:
+            t = _clean(c.value).lower()
+            if not t:
+                continue
+            if any(k in t for k in ("item", "quantity", "particulars", "description")):
+                continue  # merged main header cell; not a metadata column
+            if "part no" in t or "serial no" in t or "dwg" in t:
+                exclude.add(c.column)
+        return cells[0].row, exclude
+    return None, set()
 
 
-def _row_parts(cells):
+def _row_parts(cells, exclude_cols=()):
     """Extract (qty, unit, name_parts, type_parts) from one row of cells."""
     qty, unit = None, None
     name_parts, type_parts = [], []
     for cell in cells:
+        if cell.column in exclude_cols:
+            continue
         text = _clean(cell.value)
         if not text:
             continue
@@ -327,10 +361,10 @@ def _row_parts(cells):
 
 
 def _parse_packing_sheet(sheet, path, warn) -> list:
-    header_row = _find_packing_header(sheet)
+    header_row, exclude_cols = _find_packing_header(sheet)
     if header_row is None:
         if warn:
-            warn(f"{path.name}/{sheet.name}: 未找到 Item/Quantity/Particulars 表头，跳过该表")
+            warn(f"{path.name}/{sheet.name}: 未找到 Item/Quantity 表头，跳过该表")
         return []
 
     rows = list(sheet.iter_rows())
@@ -345,7 +379,7 @@ def _parse_packing_sheet(sheet, path, warn) -> list:
     i = header_row
     while i < end:
         cells = rows[i - 1]
-        qty, unit, name_parts, type_parts = _row_parts(cells)
+        qty, unit, name_parts, type_parts = _row_parts(cells, exclude_cols)
         if qty is None:
             i += 1
             continue
@@ -353,7 +387,7 @@ def _parse_packing_sheet(sheet, path, warn) -> list:
         # look ahead: continuation / Type lines until the next qty row or end
         j = i + 1
         while j < end:
-            nqty, _, nname, ntype = _row_parts(rows[j - 1])
+            nqty, _, nname, ntype = _row_parts(rows[j - 1], exclude_cols)
             if nqty is not None:
                 break
             text = " ".join(_clean(c.value) for c in rows[j - 1] if c.value is not None)

@@ -76,7 +76,7 @@ def test_synthetic():
 
         # P1 2 items + P2 2 items + P3 1 item + P4 1 item; NoHeader skipped
         assert len(parts) == 6, [p.name for p in parts]
-        assert any("未找到 Item/Quantity/Particulars" in w for w in warns), warns
+        assert any("未找到 Item/Quantity" in w for w in warns), warns
 
         p1, p2, p3, p4, p5, p6 = parts
         assert p1.name == "消防泵出海阀(蝶阀)" and p1.qty == 1 and p1.unit == "PCE"
@@ -104,6 +104,16 @@ def test_real_file_if_present():
     assert any(p.name == "(未填写名称)" for p in parts), "Sheet1 unnamed items expected"
     vessel = detect_vessel([real])
     print(f"real file: {len(parts)} items, vessel={vessel}")
+
+    # second real sample: 9 mixed-format sheets (Chinese 签收单 + Yuantong packing lists)
+    real2 = Path("uploads/远怡湖-湛江26-8-20.xlsx")
+    if not real2.exists():
+        print("SKIP: 远怡湖 file not present")
+        return
+    parts2 = parse_sources([real2])
+    assert len(parts2) == 29, [p.name for p in parts2]
+    assert detect_vessel([real2]) == "遠怡湖"
+    print(f"real file2: {len(parts2)} items, vessel=遠怡湖")
 
 
 if __name__ == "__main__":
