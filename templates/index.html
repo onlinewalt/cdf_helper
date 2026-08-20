@@ -81,10 +81,40 @@
                 </label>
             </section>
 
+            <section>
+                <h2>4. DeepSeek 智能填写（可选）</h2>
+                <p class="muted">为来源文件中缺少“重量 / 单价”的备件调用 DeepSeek 估算并填入清单。</p>
+                <label class="check-line">
+                    <input type="checkbox" id="use_ai" name="use_ai">
+                    使用 DeepSeek 估算缺失的重量 / 单价
+                </label>
+                <div class="field" id="ai_key_field" style="display:none;">
+                    <label for="api_key">DeepSeek API Key：</label>
+                    <input type="password" id="api_key" name="api_key" value="{{ api_key_prefill }}"
+                           placeholder="sk-...（留空则读取环境变量 DEEPSEEK_API_KEY）">
+                </div>
+                <label class="check-line" id="save_key_line" style="display:none;">
+                    <input type="checkbox" name="save_key" checked>
+                    将 API Key 保存到本地 config.json（下次免填）
+                </label>
+            </section>
+
             <div class="actions">
                 <button type="submit" class="btn btn-primary">生成报关清单</button>
             </div>
         </form>
     </div>
+    <script>
+        const useAi = document.getElementById('use_ai');
+        const keyField = document.getElementById('ai_key_field');
+        const saveLine = document.getElementById('save_key_line');
+        function toggleAi() {
+            const on = useAi.checked;
+            keyField.style.display = on ? '' : 'none';
+            saveLine.style.display = on ? '' : 'none';
+        }
+        useAi.addEventListener('change', toggleAi);
+        toggleAi();
+    </script>
 </body>
 </html>

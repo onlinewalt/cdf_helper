@@ -139,3 +139,14 @@ input[type="file"] {
 
 .warnings h3 { margin: 0 0 6px; font-size: 14px; color: #8a6d1a; }
 .warnings ul { margin: 0; padding-left: 18px; }
+
+.ai-summary {
+    background: #e8f4fd;
+    border: 1px solid #b8d9f0;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 14px 0;
+    font-size: 13px;
+}
+.ai-summary h3 { margin: 0 0 6px; font-size: 14px; color: #1a5276; }
+.ai-summary p { margin: 0; }

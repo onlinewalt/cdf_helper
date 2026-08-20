@@ -3,3 +3,5 @@ __pycache__/
 .venv/
 uploads/
 generated/
+config.json
+ai_cache.json

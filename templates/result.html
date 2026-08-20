@@ -19,6 +19,14 @@
             <p><strong>船名：</strong>{{ vessel or '（未识别到）' }}　<strong>目的港：</strong>{{ port or '-' }}　<strong>日期：</strong>{{ date }}</p>
             <p><strong>备件条数：</strong>{{ item_count }}</p>
 
+            {% if ai_stats %}
+                <div class="ai-summary">
+                    <h3>DeepSeek 智能填写</h3>
+                    <p>缺少 重量/单价 的备件：{{ ai_stats.requested }} 条；命中本地缓存：{{ ai_stats.from_cache }} 条；
+                        本次新增估算：{{ ai_stats.filled }} 条；失败/未识别：{{ ai_stats.errors }} 条。</p>
+                </div>
+            {% endif %}
+
             {% if warnings %}
                 <div class="warnings">
                     <h3>解析提示</h3>

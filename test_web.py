@@ -1,16 +1,26 @@
 """End-to-end test of the Flask web app using the test client."""
 import io
+import re
 import sys
 import glob
 import os
+import tempfile
+from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 
 import webapp
 from webapp import app, GENERATED_DIR
+from cdf_helper import config as app_config
+
+# isolate config writes from the real config.json
+app_config.CONFIG_PATH = Path(tempfile.mkdtemp()) / "config.json"
 
 tpl = [f for f in glob.glob("*.xlsx") if "报关清单" in f][0]
-srcs = glob.glob("*.xls")
+srcs = [Path(f) for f in (glob.glob("*.xls") or sorted(glob.glob("uploads/*.xls")))]
+# drop the "-<hex>" duplicate copies that earlier uploads created
+srcs = [f for f in srcs if not re.search(r"-[0-9a-f]{6}(?=\.xls$)", f.name)]
+src_values = [os.path.relpath(s) for s in srcs]  # e.g. "uploads/xx.xls" or "xx.xls"
 
 client = app.test_client()
 
@@ -24,7 +34,7 @@ print("GET / -> 200 OK, template in dropdown:", tpl in html)
 # 2. generate using server-side files (template + sources), vessel blank (auto-detect)
 data = {
     "template_path": os.path.basename(tpl),
-    "source_paths": [os.path.basename(s) for s in srcs],
+    "source_paths": src_values,
     "vessel": "",
     "port": "上海",
     "date": "2026-08-20",
@@ -37,7 +47,6 @@ print("POST /generate (server files) -> 200")
 print("  has 人马座 in page:", "人马座" in body, "| item count shown:", "备件条数" in body)
 
 # 3. download the file
-import re
 m = re.search(r'href="(/download/[^"]+)"', body)
 assert m, "no download link found"
 url = m.group(1).replace("&amp;", "&")
@@ -76,5 +85,48 @@ r = client.post("/generate", data={"template_path": os.path.basename(tpl)},
 body = r.get_data(as_text=True)
 assert "请至少选择一个" in body, body[:200]
 print("error path (no sources) -> redirect with flash OK")
+
+# 6. DeepSeek path: mocked enrich_parts fills weight/price
+def fake_enrich(parts, api_key, on_status=None):
+    for p in parts:
+        if p.weight is None:
+            p.weight = 9.9
+        if p.price is None:
+            p.price = 88.8
+    if on_status:
+        on_status("（模拟）DeepSeek 估算 10 条")
+    return {"requested": 10, "filled": 8, "from_cache": 0, "errors": 2}
+
+webapp.enrich_parts = fake_enrich
+r = client.post(
+    "/generate",
+    data={
+        "template_path": os.path.basename(tpl),
+        "source_paths": [src_values[0]],
+        "vessel": "AI测试船",
+        "port": "测试港",
+        "date": "2026-08-20",
+        "use_ai": "on",
+        "api_key": "sk-test",
+        "save_key": "on",
+    },
+    content_type="multipart/form-data",
+)
+body = r.get_data(as_text=True)
+assert r.status_code == 200, r.status_code
+assert "AI测试船" in body and "DeepSeek 智能填写" in body, body[:300]
+print("POST /generate with use_ai -> 200 | AI summary shown:", "DeepSeek 智能填写" in body)
+
+# 7. AI enabled but no key -> error flash
+app_config.CONFIG_PATH.unlink(missing_ok=True)  # ensure no saved key
+r = client.post(
+    "/generate",
+    data={"template_path": os.path.basename(tpl), "source_paths": [src_values[0]],
+          "use_ai": "on", "api_key": ""},
+    content_type="multipart/form-data", follow_redirects=True,
+)
+body = r.get_data(as_text=True)
+assert "API Key" in body, body[:300]
+print("AI without key -> error flash OK")
 
 print("\nALL TESTS PASSED")

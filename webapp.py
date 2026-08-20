@@ -12,6 +12,8 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, redirect, render_template, request, send_file, url_for
 
+from cdf_helper import config as app_config
+from cdf_helper.ai import enrich_parts
 from cdf_helper.generator import generate, sanitize_filename
 from cdf_helper.parser import parse_sources, detect_vessel
 
@@ -88,6 +90,7 @@ def index():
         server_template=_server_template_file(),
         source_candidates=_server_source_files(),
         today=datetime.date.today().isoformat(),
+        api_key_prefill=app_config.get_api_key(),
     )
 
 
@@ -141,6 +144,23 @@ def do_generate():
     date = request.form.get("date", "").strip() or datetime.date.today().isoformat()
     include_spec = request.form.get("include_spec") == "on"
 
+    # --- optional: DeepSeek smart fill for weight / unit price ----------
+    ai_stats = None
+    ai_log = []
+    if request.form.get("use_ai") == "on":
+        api_key = request.form.get("api_key", "").strip() or app_config.get_api_key()
+        if request.form.get("save_key") == "on" and api_key:
+            app_config.save_config({"api_key": api_key})
+        if not api_key:
+            flash("已勾选 DeepSeek 智能填写，但未提供 API Key（或未设置环境变量 DEEPSEEK_API_KEY）。", "error")
+            return redirect(url_for("index"))
+        try:
+            ai_stats = enrich_parts(parts, api_key, on_status=ai_log.append)
+            warnings.extend(ai_log)
+        except Exception as e:
+            flash(f"DeepSeek 调用失败：{e}", "error")
+            return redirect(url_for("index"))
+
     output_name = f"{sanitize_filename(vessel)}-{sanitize_filename(port)}-{REPORT_LABEL}-{sanitize_filename(date)}.xlsx"
     out_path = GENERATED_DIR / output_name
     if out_path.exists():
@@ -167,6 +187,7 @@ def do_generate():
         date=date,
         item_count=len(parts),
         warnings=warnings,
+        ai_stats=ai_stats,
     )
 
 
