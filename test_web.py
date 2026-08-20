@@ -17,9 +17,10 @@ from cdf_helper import config as app_config
 app_config.CONFIG_PATH = Path(tempfile.mkdtemp()) / "config.json"
 
 tpl = [f for f in glob.glob("*.xlsx") if "报关清单" in f][0]
-srcs = [Path(f) for f in (glob.glob("*.xls") or sorted(glob.glob("uploads/*.xls")))]
-# drop the "-<hex>" duplicate copies that earlier uploads created
-srcs = [f for f in srcs if not re.search(r"-[0-9a-f]{6}(?=\.xls$)", f.name)]
+srcs = [Path(f) for f in (glob.glob("*.xls") or sorted(glob.glob("uploads/*.xlsx")))]
+# drop the "-<hex>" duplicate copies that earlier uploads created, and any uploaded template copy
+srcs = [f for f in srcs if not re.search(r"-[0-9a-f]{6}(?=\.(?:xls|xlsx)$)", f.name)]
+srcs = [f for f in srcs if "模板" not in f.name]
 src_values = [os.path.relpath(s) for s in srcs]  # e.g. "uploads/xx.xls" or "xx.xls"
 
 client = app.test_client()

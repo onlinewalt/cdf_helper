@@ -71,13 +71,14 @@ D:\CDF_helper\
 
 ### 5.1 `cdf_helper/parser.py` — 来源解析
 
-- 统一封装 `_Sheet` / `_Cell`，同时支持 xlrd（.xls）与 openpyxl（.xlsx）。
+- 统一封装 `_Sheet` / `_Cell`，同时支持 xlrd（.xls）与 openpyxl（.xlsx）；`parse_source` 遍历**全部工作表**，每张表独立解析（多 sheet 的装箱单各自为一组备件）。
 - **表头自动识别**（`_find_header_row`）：
   1. 逐行扫描，先按 `HEADER_ALIASES` 精确匹配（规范化后：去空格、小写）。
   2. 未精确命中时按 `_CONTAINS_RULES` 包含匹配（优先级：名称 > 规格/型号 > 数量 > 单位 > 重量 > 单价）。
   3. 当某行同时识别到 `name` 与 `qty` 即视为表头行。
 - 数据行按列读入；缺少数量按 1 处理并回调 `warn()` 提示；`_to_number` 支持千分位/全角逗号/提取首个数（正则兜底）。
-- `detect_vessel(paths)`：正则匹配 `船名[:：]xxx` 或 `船名/单位` 右邻单元格，返回船名。
+- **英文 Receipt/Packing List**（如远通海事，表头含 `Item/Quantity(Unit)/Particulars`，数量形如 `N PCE`，以 `** End of Listing **` 结尾）：表头行内找不到 `name+qty` 时自动回退到 `_parse_packing_sheet` 启发式解析——按行抓数量（`_QTY_RE`）、从同行/后续行收集名称与 `Type:` 规格，直至下一数量行或清单末尾；缺名称的条目记占位符 `(未填写名称)` 并告警；签名/网址等页脚碎片会被 `_trim_footer` 剔除。
+- `detect_vessel(paths)`：逐行匹配 `船名[:：]xxx`、`船名/单位` 右邻单元格、或 `Vessel Name` 行（含跨格值，优先取括号内中文船名）。
 - 数据模型：
 
 ```python
