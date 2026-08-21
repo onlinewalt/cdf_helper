@@ -99,6 +99,25 @@
                 </label>
             </section>
 
+            <section>
+                <h2>5. 英文名称翻译（自动）</h2>
+                <p class="muted">自动将备件名称中的英文翻译为中文。需要配置翻译 API 凭据。</p>
+                <div class="field">
+                    <label for="trans_app_id">翻译 App ID：</label>
+                    <input type="text" id="trans_app_id" name="trans_app_id" value="{{ trans_app_id_prefill }}"
+                           placeholder="留空则读取环境变量 TRANSLATE_APP_ID">
+                </div>
+                <div class="field">
+                    <label for="trans_apikey">翻译 API Key：</label>
+                    <input type="password" id="trans_apikey" name="trans_apikey" value="{{ trans_apikey_prefill }}"
+                           placeholder="留空则读取环境变量 TRANSLATE_APIKEY">
+                </div>
+                <label class="check-line">
+                    <input type="checkbox" name="save_trans_key" checked>
+                    保存翻译凭据到本地 config.json（下次免填）
+                </label>
+            </section>
+
             <div class="actions">
                 <button type="submit" class="btn btn-primary">生成报关清单</button>
             </div>

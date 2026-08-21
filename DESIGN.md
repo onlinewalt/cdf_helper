@@ -1,6 +1,6 @@
 # CDF Helper 设计文档
 
-> 版本：0.2.0（对应提交 `676bd7c`）
+> 版本：0.3.0
 > 技术栈：Python 3.13 + Flask 3 + openpyxl + xlrd
 
 ---
@@ -121,21 +121,31 @@ class Part:
 - `_parse_json` 兼容模型偶尔输出 ` ```json ... ``` ` 包裹。
 - 结果 `stats = {requested, filled, from_cache, errors}`。
 
-### 5.4 `cdf_helper/config.py` — 配置
+### 5.3 `cdf_helper/translator.py` — 英文名称翻译
+
+- **始终开启**：在 `parse_sources` 后、AI 估算前自动执行，将英文备件名称翻译为中文。
+- **语言判断**：`_is_english` 检测名称中是否含有 CJK 字符——仅无中文的字符段（如 `INTERMEDIATE RELAY`）会被翻译；已含中文的名称原样保留。
+- **API**：调用牛转翻译 API `POST https://api.niutrans.com/v2/text/translate`，参数 `from=en/to=zh/appId/timestamp/srcText/authStr`；`authStr` 为 MD5(sorted(params + apikey))。
+- **凭据**：优先环境变量 `TRANSLATE_APP_ID` / `TRANSLATE_APIKEY`，其次 `config.json` 的 `trans_app_id` / `trans_apikey`；Web 表单可填并「保存到本地 config.json」。
+- **缓存**：结果缓存在 `translate_cache.json`（key = `sha1(name)`），命中直接返回不再请求；失败结果（None）也写入缓存防止重复请求。
+- **批量**：`BATCH_SIZE=20`，API 失败/超时 HTTP 429/5xx 自动重试一次（间隔 5s）。
+- **容错**：凭据缺失或 API 抛错均为非致命，原英文名称原样保留，并通过 `warn()` 提示。
+
+### 5.5 `cdf_helper/config.py` — 配置
 
 - `config.json` 存 API Key 等本地配置。
 - 优先级：环境变量 `DEEPSEEK_API_KEY` > `config.json`。
 - `save_config()` 只更新传入字段，保留其他配置。
 
-### 5.5 `webapp.py` — Flask Web
+### 5.6 `webapp.py` — Flask Web
 
 - `GET /`：首页，列出服务器根目录可选的模板与来源文件，回填配置中的 API Key。
-- `POST /generate`：处理上传（`template_upload` / `sources_upload`，存入 `uploads/`）或服务器文件选择（`template_path` / `source_paths`）→ 解析 → 可选 DeepSeek → 生成到 `generated/` → 渲染 result 页。
+- `POST /generate`：处理上传（`template_upload` / `sources_upload`，存入 `uploads/`）或服务器文件选择（`template_path` / `source_paths`）→ 解析 → 翻译英文名称（自动）→ 可选 DeepSeek → 生成到 `generated/` → 渲染 result 页。
 - `GET /download/<file>`：仅允许从 `generated/` 目录内下载（防目录穿越）。
 - 启动时清理 `uploads/`、`generated/` 中超过 7 天的旧文件（`_cleanup_old_files`）。
-- 表单字段：`vessel`（留空自动识别）、`port`、`date`、`include_spec`、`use_ai`、`api_key`、`save_key`。
+- 表单字段：`vessel`（留空自动识别）、`port`、`date`、`include_spec`、`use_ai`、`api_key`、`save_key`、`trans_app_id`、`trans_apikey`、`save_trans_key`。
 
-### 5.6 `main.py` — 入口
+### 5.7 `main.py` — 入口
 
 - 无子命令：`_serve()` 自动挑选空闲端口（默认 5000 起），启动 Flask 并打开浏览器。
 - `generate` 子命令：完整 CLI 流程，新增 `--ai` / `--api-key`。
@@ -154,8 +164,9 @@ class Part:
 | `test_ai.py` | 只补缺失值；缓存命中不再调 API；API 失败保持空白；JSON 包裹兼容 |
 | `test_web.py` | 首页渲染、服务器文件生成、下载完整性、上传路径、无来源报错、AI 流程、无 Key 报错 |
 | `test_packing.py` | 英文 Packing List 多行/多 Sheet 解析、Item/Quantity(Unit)/Particulars 表头识别、`End of Listing` 结束标记 |
+| `test_translator.py` | 英文名称识别、翻译执行、缓存命中、API 失败保留原文、缓存文件持久化 |
 
-运行：`python test_ai.py && python test_web.py && python test_packing.py`
+运行：`python test_ai.py && python test_translator.py && python test_web.py && python test_packing.py`
 
 ## 8. 已知限制与未来扩展
 

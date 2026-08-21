@@ -45,6 +45,13 @@ DeepSeek API Key 优先级：
 2. 环境变量 `DEEPSEEK_API_KEY`
 3. `config.json`（通过 Web 界面「保存 API Key」保存）
 
+### 英文名称翻译（自动）
+程序会自动将备件名称中的英文翻译为中文（通过牛转翻译 API）。翻译凭据优先级：
+1. 环境变量 `TRANSLATE_APP_ID` / `TRANSLATE_APIKEY`
+2. `config.json`（通过 Web 界面「保存翻译凭据」保存）
+
+仅无中文字符的名称会被翻译；已含中文的名称原样保留。翻译结果缓存在 `translate_cache.json`，避免重复请求。
+
 ## 模板格式要求
 
 模板文件 Sheet1 的固定布局：
@@ -59,14 +66,15 @@ DeepSeek API Key 优先级：
 ## 测试
 
 ```bash
-python test_ai.py      # AI模块测试（模拟，不调用真实API）
-python test_web.py     # Web 端到端测试
-python test_packing.py # Packing List解析测试
+python test_ai.py          # AI模块测试（模拟，不调用真实API）
+python test_translator.py  # 翻译模块测试（模拟，不调用真实API）
+python test_web.py         # Web 端到端测试
+python test_packing.py     # Packing List解析测试
 ```
 
 运行所有测试：
 ```bash
-python test_ai.py && python test_web.py && python test_packing.py
+python test_ai.py && python test_translator.py && python test_web.py && python test_packing.py
 ```
 
 ## 目录结构
@@ -80,6 +88,7 @@ python test_ai.py && python test_web.py && python test_packing.py
 ├── static/style.css     # 页面样式
 ├── cdf_helper/
 │   ├── parser.py        # 来源文件解析
+│   ├── translator.py    # 英文名称翻译（Niutrans API，自动缓存）
 │   ├── generator.py     # 模板填充/生成
 │   ├── ai.py            # DeepSeek估算
 │   └── config.py        # API Key配置

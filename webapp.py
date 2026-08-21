@@ -22,6 +22,7 @@ from cdf_helper.parser import (
     load_vessel_names,
     bilingual_vessel,
 )
+from cdf_helper.translator import translate_names
 
 REPORT_LABEL = "报关清单"
 BASE_DIR = Path(__file__).resolve().parent
@@ -110,6 +111,7 @@ def _basename(path):
 
 @app.route("/")
 def index():
+    trans_app_id, trans_apikey = app_config.get_trans_credentials()
     return render_template(
         "index.html",
         template_candidates=[f for f in _spreadsheets_in(BASE_DIR) if f.suffix == ".xlsx"],
@@ -117,6 +119,8 @@ def index():
         source_candidates=_server_source_files(),
         today=datetime.date.today().isoformat(),
         api_key_prefill=app_config.get_api_key(),
+        trans_app_id_prefill=trans_app_id,
+        trans_apikey_prefill=trans_apikey,
     )
 
 
@@ -162,6 +166,21 @@ def do_generate():
     except ValueError as e:
         flash(str(e), "error")
         return redirect(url_for("index"))
+
+    # --- always-on: translate English part names to Chinese --------------
+    _saved_app_id, _saved_apikey = app_config.get_trans_credentials()
+    trans_app_id = request.form.get("trans_app_id", "").strip() or _saved_app_id
+    trans_apikey = request.form.get("trans_apikey", "").strip() or _saved_apikey
+    if request.form.get("save_trans_key") == "on" and trans_app_id and trans_apikey:
+        app_config.save_config({"trans_app_id": trans_app_id, "trans_apikey": trans_apikey})
+    trans_stats = None
+    if trans_app_id and trans_apikey:
+        try:
+            trans_stats = translate_names(parts, trans_app_id, trans_apikey, on_status=warn)
+        except Exception as e:
+            warn(f"翻译调用失败：{e}")
+    else:
+        warn("未配置翻译 API 凭据，跳过英文名称翻译。")
 
     vessel = request.form.get("vessel", "").strip()
     chinese, english = (None, None)
@@ -220,6 +239,7 @@ def do_generate():
         item_count=len(parts),
         warnings=warnings,
         ai_stats=ai_stats,
+        trans_stats=trans_stats,
     )
 
 
