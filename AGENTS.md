@@ -23,7 +23,7 @@ python3 -m pip install -r requirements.txt
 main.py                  # entry: `python3 main.py` → Web UI; `generate` → CLI
 webapp.py                # Flask app, routes: GET /, POST /generate, GET /download/<file>
 cdf_helper/
-├── parser.py    # Excel → List[Part] (Chinese headers + English packing lists + vessel detection)
+├── parser.py    # Excel → List[Part] (Chinese headers + English packing lists + multi-line cells + vessel detection)
 ├── generator.py # fills template.xlsx → output .xlsx
 ├── ai.py        # DeepSeek enrichment for missing weight/price (batching + local cache)
 ├── config.py    # API key from env DEEPSEEK_API_KEY > config.json
@@ -42,8 +42,8 @@ Entry points:
   - Row 2: headers (序号 / 备件名称 / 数量 / 单位 / 重量(KG) / 单价/RMB / 金额RMB)
   - Rows 3–6: sample data (cleared and reused for styling)
   - Row 7: total row (yellow fill)
-- **Source files**: any `.xls`/`.xlsx` in the project root is a candidate. Files containing "船名" are treated as the vessel-name lookup table, not source data. Files containing "报关清单" are treated as templates.
-- **Vessel name**: auto-detected from source files. Format: `中文 英文` (e.g., `远怡湖 COSMERRY LAKE`), resolved via `中英文船名25-5-14.xls` lookup workbook.
+- **Source files**: any `.xls`/`.xlsx` in the project root is a candidate. Files containing "船名" are treated as the vessel-name lookup table, not source data. Files containing "报关清单" are treated as templates. `test_web.py` uses `glob("*.xls*")` to pick up both `.xls` and `.xlsx` from root.
+- **Vessel name**: auto-detected from source files. Format: `中文 英文` (e.g., `远怡湖 COSMERRY LAKE`), resolved via `中英文船名25-5-14.xls` lookup workbook. Trailing hyphens in English names (e.g. `YINNIAN-`) are stripped.
 - **AI**: optional (`--ai` flag or "use_ai" checkbox). Key from `--api-key`, `config.json`, or `DEEPSEEK_API_KEY` env var. Results cached in `ai_cache.json` (keyed by `sha1(name|spec)`) to avoid repeat charges. API failures are non-fatal — missing fields stay empty.
 - **Filenames**: sanitized via `generator.sanitize_filename` (strips `\/:*?"<>|`). Output pattern: `<vessel>-<port>-报关清单-<date>.xlsx`.
 - **Temp files**: `uploads/` and `generated/` are gitignored. Old files (>7 days) are cleaned on webapp startup.
@@ -51,7 +51,7 @@ Entry points:
 ## Testing notes
 
 - `test_web.py` and `test_packing.py` use `glob` to find real Excel files in the project root. Tests may print "SKIP" if expected files are absent — this is normal.
-- `test_web.py` creates an isolated temp `config.json` to avoid clobbering real config.
+- `test_web.py` uses `glob("*.xls*")` to pick up both `.xls` and `.xlsx` from root; filters out template/lookup/duplicate files. Creates an isolated temp `config.json` to avoid clobbering real config.
 - `test_ai.py` mocks `_post_json` — no real API calls.
 - `test_packing.py:test_real_file_if_present` requires files in `uploads/` — skipped if absent.
 - To run a single test function (not just a file): there's no pytest; run via `python3 -c "import test_packing; test_packing.test_synthetic()"`.
@@ -70,4 +70,5 @@ Entry points:
 
 - Template example (do not delete, used by tests): `veseel name-destination port-报关清单-date.xlsx`
 - Vessel name lookup table: `中英文船名25-5-14.xls`
+- Source data example (new format with multi-line/merged cells): `new file.xlsx`
 - Windows launcher: `启动CDF助手.bat` (ASCII-only to avoid encoding issues)
