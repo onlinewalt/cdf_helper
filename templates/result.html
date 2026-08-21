@@ -27,14 +27,6 @@
                 </div>
             {% endif %}
 
-            {% if trans_stats %}
-                <div class="trans-summary">
-                    <h3>英文名称翻译</h3>
-                    <p>英文名称翻译为中文：{{ trans_stats.translated }} 条；命中本地缓存：{{ trans_stats.from_cache }} 条；
-                        失败/未识别：{{ trans_stats.errors }} 条。</p>
-                </div>
-            {% endif %}
-
             {% if warnings %}
                 <div class="warnings">
                     <h3>解析提示</h3>

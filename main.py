@@ -23,7 +23,6 @@ from cdf_helper.parser import (
     load_vessel_names,
     bilingual_vessel,
 )
-from cdf_helper.translator import translate_names
 
 
 def _ensure_utf8_stdio():
@@ -193,15 +192,6 @@ def main(argv=None):
     for msg in warnings:
         print(f"  提示: {msg}")
     print(f"共解析到 {len(parts)} 条备件。")
-
-    # --- always-on: translate English part names to Chinese --------------
-    trans_app_id, trans_apikey = app_config.get_trans_credentials()
-    if trans_app_id and trans_apikey:
-        print("正在翻译英文备件名称 ...")
-        trans_stats = translate_names(parts, trans_app_id, trans_apikey, on_status=lambda m: print(f"  {m}"))
-    else:
-        print("  未配置翻译 API 凭据，跳过英文名称翻译。")
-        trans_stats = None
 
     vessel = args.vessel or detect_vessel(sources)
     chinese, english = (None, None)

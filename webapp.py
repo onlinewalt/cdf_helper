@@ -22,7 +22,6 @@ from cdf_helper.parser import (
     load_vessel_names,
     bilingual_vessel,
 )
-from cdf_helper.translator import translate_names
 
 REPORT_LABEL = "报关清单"
 BASE_DIR = Path(__file__).resolve().parent
@@ -164,17 +163,6 @@ def do_generate():
         flash(str(e), "error")
         return redirect(url_for("index"))
 
-    # --- always-on: translate English part names to Chinese --------------
-    trans_app_id, trans_apikey = app_config.get_trans_credentials()
-    trans_stats = None
-    if trans_app_id and trans_apikey:
-        try:
-            trans_stats = translate_names(parts, trans_app_id, trans_apikey, on_status=warn)
-        except Exception as e:
-            warn(f"翻译调用失败：{e}")
-    else:
-        warn("未配置翻译 API 凭据，跳过英文名称翻译。")
-
     vessel = request.form.get("vessel", "").strip()
     chinese, english = (None, None)
     if not vessel:
@@ -232,7 +220,6 @@ def do_generate():
         item_count=len(parts),
         warnings=warnings,
         ai_stats=ai_stats,
-        trans_stats=trans_stats,
     )
 
 

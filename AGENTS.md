@@ -8,7 +8,7 @@ Single-package Python tool (no virtualenv, no build step). Run directly with Pyt
 |---|---|
 | Web UI (starts on port 5000) | `python3 main.py` |
 | CLI generate | `python3 main.py generate --template T.xlsx --source S.xls --vessel "远怡湖 COSMERRY LAKE" --port 上海` |
-| Run all tests | `python3 test_ai.py && python3 test_translator.py && python3 test_web.py && python3 test_packing.py` |
+| Run all tests | `python3 test_ai.py && python3 test_web.py && python3 test_packing.py` |
 | Run packing parser tests only | `python3 test_packing.py` |
 | Run AI tests only | `python3 test_ai.py` |
 
@@ -24,10 +24,9 @@ main.py                  # entry: `python3 main.py` → Web UI; `generate` → C
 webapp.py                # Flask app, routes: GET /, POST /generate, GET /download/<file>
 cdf_helper/
 ├── parser.py    # Excel → List[Part] (Chinese headers + English packing lists + multi-line cells + vessel detection)
-├── translator.py # English → Chinese part name translation via Niutrans API (always-on, caching)
 ├── generator.py # fills template.xlsx → output .xlsx
 ├── ai.py        # DeepSeek enrichment for missing weight/price (batching + local cache)
-├── config.py    # API keys from env > config.json (DeepSeek + Niutrans)
+├── config.py    # API key from env DEEPSEEK_API_KEY > config.json
 └── __init__.py  # version 0.2.0
 ```
 
@@ -46,7 +45,6 @@ Entry points:
 - **Source files**: any `.xls`/`.xlsx` in the project root is a candidate. Files containing "船名" are treated as the vessel-name lookup table, not source data. Files containing "报关清单" are treated as templates. `test_web.py` uses `glob("*.xls*")` to pick up both `.xls` and `.xlsx` from root.
 - **Vessel name**: auto-detected from source files. Format: `中文 英文` (e.g., `远怡湖 COSMERRY LAKE`), resolved via `中英文船名25-5-14.xls` lookup workbook. Trailing hyphens in English names (e.g. `YINNIAN-`) are stripped.
 - **AI**: optional (`--ai` flag or "use_ai" checkbox). Key from `--api-key`, `config.json`, or `DEEPSEEK_API_KEY` env var. Results cached in `ai_cache.json` (keyed by `sha1(name|spec)`) to avoid repeat charges. API failures are non-fatal — missing fields stay empty.
-- **Translation**: always-on. Translates English part names to Chinese via Niutrans API (`https://api.niutrans.com/v2/text/translate`). Credentials from `config.json` (`trans_app_id`/`trans_apikey`) or env vars `TRANSLATE_APP_ID`/`TRANSLATE_APIKEY`. Only names with no CJK characters are translated. Results cached in `translate_cache.json` (keyed by `sha1(name)`). Missing credentials or API failures skip translation non-fatally.
 - **Filenames**: sanitized via `generator.sanitize_filename` (strips `\/:*?"<>|`). Output pattern: `<vessel>-<port>-报关清单-<date>.xlsx`.
 - **Temp files**: `uploads/` and `generated/` are gitignored. Old files (>7 days) are cleaned on webapp startup.
 
@@ -55,7 +53,6 @@ Entry points:
 - `test_web.py` and `test_packing.py` use `glob` to find real Excel files in the project root. Tests may print "SKIP" if expected files are absent — this is normal.
 - `test_web.py` uses `glob("*.xls*")` to pick up both `.xls` and `.xlsx` from root; filters out template/lookup/duplicate files. Creates an isolated temp `config.json` to avoid clobbering real config.
 - `test_ai.py` mocks `_post_json` — no real API calls.
-- `test_translator.py` mocks `_translate_api` — no real API calls.
 - `test_packing.py:test_real_file_if_present` requires files in `uploads/` — skipped if absent.
 - To run a single test function (not just a file): there's no pytest; run via `python3 -c "import test_packing; test_packing.test_synthetic()"`.
 
@@ -68,12 +65,10 @@ Entry points:
 5. **No CSRF protection on the web form** — do not expose to the public internet.
 6. **`SECRET_KEY` is hardcoded** (`webapp.py` line 54) — fine for local dev only.
 7. **Chinese locale assumed** — encoding errors may appear if system locale doesn't support UTF-8; `main.py:_ensure_utf8_stdio()` mitigates this.
-8. **`requests` dependency** — the translator module uses `requests` (added to `requirements.txt`). Install via `pip install -r requirements.txt`.
 
 ## File references
 
 - Template example (do not delete, used by tests): `veseel name-destination port-报关清单-date.xlsx`
 - Vessel name lookup table: `中英文船名25-5-14.xls`
 - Source data example (new format with multi-line/merged cells): `new file.xlsx`
-- Translation results cache: `translate_cache.json` (gitignored)
 - Windows launcher: `启动CDF助手.bat` (ASCII-only to avoid encoding issues)
