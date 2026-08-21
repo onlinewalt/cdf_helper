@@ -111,7 +111,6 @@ def _basename(path):
 
 @app.route("/")
 def index():
-    trans_app_id, trans_apikey = app_config.get_trans_credentials()
     return render_template(
         "index.html",
         template_candidates=[f for f in _spreadsheets_in(BASE_DIR) if f.suffix == ".xlsx"],
@@ -119,8 +118,6 @@ def index():
         source_candidates=_server_source_files(),
         today=datetime.date.today().isoformat(),
         api_key_prefill=app_config.get_api_key(),
-        trans_app_id_prefill=trans_app_id,
-        trans_apikey_prefill=trans_apikey,
     )
 
 
@@ -168,11 +165,7 @@ def do_generate():
         return redirect(url_for("index"))
 
     # --- always-on: translate English part names to Chinese --------------
-    _saved_app_id, _saved_apikey = app_config.get_trans_credentials()
-    trans_app_id = request.form.get("trans_app_id", "").strip() or _saved_app_id
-    trans_apikey = request.form.get("trans_apikey", "").strip() or _saved_apikey
-    if request.form.get("save_trans_key") == "on" and trans_app_id and trans_apikey:
-        app_config.save_config({"trans_app_id": trans_app_id, "trans_apikey": trans_apikey})
+    trans_app_id, trans_apikey = app_config.get_trans_credentials()
     trans_stats = None
     if trans_app_id and trans_apikey:
         try:

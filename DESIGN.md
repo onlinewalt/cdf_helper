@@ -143,7 +143,7 @@ class Part:
 - `POST /generate`：处理上传（`template_upload` / `sources_upload`，存入 `uploads/`）或服务器文件选择（`template_path` / `source_paths`）→ 解析 → 翻译英文名称（自动）→ 可选 DeepSeek → 生成到 `generated/` → 渲染 result 页。
 - `GET /download/<file>`：仅允许从 `generated/` 目录内下载（防目录穿越）。
 - 启动时清理 `uploads/`、`generated/` 中超过 7 天的旧文件（`_cleanup_old_files`）。
-- 表单字段：`vessel`（留空自动识别）、`port`、`date`、`include_spec`、`use_ai`、`api_key`、`save_key`、`trans_app_id`、`trans_apikey`、`save_trans_key`。
+- 表单字段：`vessel`（留空自动识别）、`port`、`date`、`include_spec`、`use_ai`、`api_key`、`save_key`。
 
 ### 5.7 `main.py` — 入口
 
