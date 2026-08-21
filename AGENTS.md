@@ -43,6 +43,7 @@ Entry points:
   - Rows 3–6: sample data (cleared and reused for styling)
   - Row 7: total row (yellow fill)
 - **Source files**: any `.xls`/`.xlsx` in the project root is a candidate. Files containing "船名" are treated as the vessel-name lookup table, not source data. Files containing "报关清单" are treated as templates. `test_web.py` uses `glob("*.xls*")` to pick up both `.xls` and `.xlsx` from root.
+- **Packed single-column format**: when all header fields (序号/设备/名称/编号/单位/数量/备注) are in a single cell with 2+ space-separated headers, the parser detects this and uses `_parse_packed_sheet` to extract parts from space-separated data rows. Handles both multi-row (header and data in separate rows) and multi-line cell (header and data in same cell, newline-separated) variants.
 - **Vessel name**: auto-detected from source files. Format: `中文 英文` (e.g., `远怡湖 COSMERRY LAKE`), resolved via `中英文船名25-5-14.xls` lookup workbook. Trailing hyphens in English names (e.g. `YINNIAN-`) are stripped.
 - **AI**: optional (`--ai` flag or "use_ai" checkbox). Key from `--api-key`, `config.json`, or `DEEPSEEK_API_KEY` env var. Results cached in `ai_cache.json` (keyed by `sha1(name|spec)`) to avoid repeat charges. API failures are non-fatal — missing fields stay empty.
 - **Filenames**: sanitized via `generator.sanitize_filename` (strips `\/:*?"<>|`). Output pattern: `<vessel>-<port>-报关清单-<date>.xlsx`.
@@ -54,6 +55,7 @@ Entry points:
 - `test_web.py` uses `glob("*.xls*")` to pick up both `.xls` and `.xlsx` from root; filters out template/lookup/duplicate files. Creates an isolated temp `config.json` to avoid clobbering real config.
 - `test_ai.py` mocks `_post_json` — no real API calls.
 - `test_packing.py:test_real_file_if_present` requires files in `uploads/` — skipped if absent.
+- `test_packing.py:test_packed_real_file_if_present` checks `远怡湖missing sheets.xlsx` if present.
 - To run a single test function (not just a file): there's no pytest; run via `python3 -c "import test_packing; test_packing.test_synthetic()"`.
 
 ## Gotchas
@@ -71,4 +73,5 @@ Entry points:
 - Template example (do not delete, used by tests): `veseel name-destination port-报关清单-date.xlsx`
 - Vessel name lookup table: `中英文船名25-5-14.xls`
 - Source data example (new format with multi-line/merged cells): `new file.xlsx`
+- Source data example (packed single-column format): `远怡湖missing sheets.xlsx`
 - Windows launcher: `启动CDF助手.bat` (ASCII-only to avoid encoding issues)

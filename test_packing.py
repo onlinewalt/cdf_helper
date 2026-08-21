@@ -146,7 +146,94 @@ def test_real_file_if_present():
     print(f"real file2: {len(parts2)} items, vessel=遠怡湖")
 
 
+
+# ---- packed single-column format tests ----
+
+def _write_packed_workbook(path: Path):
+    """Create a workbook with packed single-column format sheets."""
+    wb = Workbook()
+
+    # Sheet1: multi-row packed (header on row 5, data on rows 6-7)
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.cell(row=4, column=1, value="单位： 寰宇船务企业有限公司     远怡湖     单号 SZY268003")
+    ws.cell(row=5, column=1, value="序号           设备                       名称                           编号             单位   数量     备注")
+    ws.cell(row=6, column=1, value="1        左舷梯             STOWING ROPE          6×37-13.0-170-I           1")
+    ws.cell(row=7, column=1, value="2                           HOISHING ROPE          6×37-15.0-180-I           2")
+    ws.cell(row=8, column=1, value="目的地：湛江")
+    ws.cell(row=9, column=1, value="经办人签字：王叶")
+
+    # Sheet2: multi-line cell format (header + data in same cell)
+    ws = wb.create_sheet("Sheet2")
+    ws.cell(row=4, column=1,
+            value="单位： 寰宇船务企业有限公司 远怡湖 单号 SZY267887\n"
+                  "序号           设备                       名称                           编号             单位   数量     备注\n"
+                  "  1      防海生物装置     Anode MGC650R 650x110     3/Drg. JCA-11529           2")
+
+    # Sheet3: Chinese equipment + English name in packed format
+    ws = wb.create_sheet("Sheet3")
+    ws.cell(row=4, column=1, value="序号  设备  名称  编号  单位  数量  备注")
+    ws.cell(row=5, column=1, value="1   泵箱总成   液压泵   0420848-92001 / 3   1")
+    ws.cell(row=6, column=1, value="2   法兰   管件   Code : 427HL110-0 B   3")
+    ws.cell(row=7, column=1, value="日期：2026/8/25")
+
+    wb.save(path)
+
+
+def test_packed_synthetic():
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "packed.xlsx"
+        _write_packed_workbook(path)
+
+        warns = []
+        parts = parse_source(path, warn=warns.append)
+
+        # Sheet1: 2 parts; Sheet2: 1 part; Sheet3: 2 parts = 5 total
+        assert len(parts) == 5, [(p.name, p.qty, p.type) for p in parts]
+
+        # Sheet1 Row 6: equipment=左舷梯, name=STOWING ROPE, code=6×37, qty=1
+        assert parts[0].name == "左舷梯 STOWING ROPE", parts[0].name
+        assert parts[0].qty == 1.0
+        assert parts[0].type == "6×37-13.0-170-I", parts[0].type
+
+        # Sheet1 Row 7: no equipment, name=HOISHING ROPE, code=6×37, qty=2
+        assert parts[1].name == "HOISHING ROPE", parts[1].name
+        assert parts[1].qty == 2.0
+        assert parts[1].type == "6×37-15.0-180-I", parts[1].type
+
+        # Sheet2 (multi-line cell): equipment=防海生物装置, name=Anode MGC650R 650x110, code=3/Drg. JCA-11529, qty=2
+        assert parts[2].name == "防海生物装置 Anode MGC650R 650x110", parts[2].name
+        assert parts[2].qty == 2.0
+        assert parts[2].type == "3/Drg. JCA-11529", parts[2].type
+
+        # Sheet3: qty should be the last numeric value
+        assert parts[3].qty == 1.0
+        assert parts[3].type == "0420848-92001 / 3", parts[3].type
+        assert parts[4].qty == 3.0
+
+        # Footer lines should not become parts
+        assert not any("目的地" in p.name for p in parts), "footer leaked into parts"
+        assert not any("签字" in p.name for p in parts), "footer leaked into parts"
+        assert not any("日期" in p.name for p in parts), "footer leaked into parts"
+        print("packed format synthetic test OK")
+
+
+def test_packed_real_file_if_present():
+    real = Path("远怡湖missing sheets.xlsx")
+    if not real.exists():
+        print("SKIP: 远怡湖missing sheets.xlsx not present")
+        return
+    parts = parse_source(real, warn=lambda m: print(f"  WARN: {m}"))
+    assert len(parts) > 0, "expected parts from packed format file"
+    assert all(p.name for p in parts), "every parsed part must have a name"
+    print(f"packed real file: {len(parts)} items")
+    for p in parts:
+        print(f"  name={p.name!r}, qty={p.qty}, type={p.type!r}")
+
 if __name__ == "__main__":
     test_synthetic()
+    test_packed_synthetic()
+    test_vessel_lookup()
+    test_packed_real_file_if_present()
     test_real_file_if_present()
     print("\nALL PARSER TESTS PASSED")

@@ -278,7 +278,8 @@ def _find_header_row(sheet):
                     continue
                 if needle in text:
                     mapping[field] = cell.column
-                    break
+                    # Do NOT break — allow multiple field matches in one cell
+                    # (needed for packed header format where all headers are in one cell)
         if "name" in mapping and "qty" in mapping:
             return cells[0].row, mapping
     return None, None
@@ -288,6 +289,7 @@ _SIGNATURE_KEYWORDS = (
     "签字", "签收", "盖章", "供船", "签收日期", "交货地址", "请核对", "核对",
     "日 期", "signed", "signature", "received", "place of supply",
     "date of supply", "please check",
+    "目的地", "供货单位", "收货人", "经办人", "邮箱", "日期", "单号",
 )
 
 
@@ -449,6 +451,132 @@ def _parse_standard(sheet, mapping, header_row, path, warn) -> list:
     return parts
 
 
+# ---- packed single-column format parsing --------------------------------
+
+_PACKED_QTY_RE = re.compile(r'^[\d.]+$')
+_CODE_PATTERN = re.compile(r'[\u00d7/]|dwg|code|drg', re.IGNORECASE)
+
+
+def _is_packed_format(mapping) -> bool:
+    """True when all mapped fields point to the same column (space-separated packed format)."""
+    cols = set(v for v in mapping.values() if v is not None)
+    return len(cols) == 1
+
+
+def _collect_packed_lines(sheet, header_row, packed_col):
+    """Collect data lines from the header cell (may contain header + data) and subsequent rows."""
+    lines = []
+
+    # 1) Check if the header cell itself contains data lines after the header line
+    header_cell = sheet.cell(header_row, packed_col)
+    if header_cell.value is not None:
+        cell_lines = _split_lines(header_cell.value)
+        header_line_idx = None
+        for i, line in enumerate(cell_lines):
+            norm = _norm(line)
+            if any(n in norm for n in ("序号", "名称", "name", "品名", "qty", "quantity")):
+                header_line_idx = i
+                break
+        if header_line_idx is not None:
+            for line in cell_lines[header_line_idx + 1:]:
+                line = line.strip()
+                if line and not _is_signature(line):
+                    lines.append(line)
+
+    # 2) Process subsequent rows
+    for row_idx in range(header_row + 1, sheet.last_row + 1):
+        cell = sheet.cell(row_idx, packed_col)
+        if cell.value is None:
+            continue
+        for line in _split_lines(cell.value):
+            line = line.strip()
+            if line and not _is_signature(line):
+                lines.append(line)
+
+    return lines
+
+
+def _parse_packed_line(line, path, warn):
+    """Parse a single packed data line into a Part.
+
+    Format: 序号  设备  名称  编号  单位  数量  备注
+    Values are separated by 2+ spaces. Some fields may be missing.
+    """
+    values = re.split(r'\s{2,}', line)
+    values = [v.strip() for v in values if v.strip()]
+
+    if not values:
+        return None
+
+    # Remove seq number (first value if it's a simple number)
+    if values and _PACKED_QTY_RE.match(values[0]):
+        values = values[1:]
+
+    if not values:
+        return None
+
+    # Extract qty (last value if it's a simple number)
+    qty = 1.0
+    if values and _PACKED_QTY_RE.match(values[-1]):
+        qty = float(values[-1])
+        values = values[:-1]
+
+    if not values:
+        if warn:
+            warn(f"{path.name}: 无法从行解析名称: {line!r}")
+        return None
+
+    # Identify code/type values
+    type_parts = []
+    remaining = []
+    for v in values:
+        if _CODE_PATTERN.search(v):
+            type_parts.append(v)
+        else:
+            remaining.append(v)
+
+    type_str = ' '.join(type_parts) if type_parts else None
+
+    # Remaining values: first is equipment (if Chinese), rest is name
+    name_parts = []
+    for v in remaining:
+        name_parts.append(v)
+
+    name = ' '.join(name_parts)
+    if not name:
+        return None
+
+    return Part(
+        name=_clean(_strip_seq(name)),
+        qty=qty,
+        unit='个',
+        type=_clean(type_str) if type_str else None,
+    )
+
+
+def _parse_packed_sheet(sheet, mapping, header_row, path, warn) -> list:
+    """Parse sheets where all header fields are in a single cell (packed format).
+
+    Data rows have fields separated by 2+ spaces within a single cell.
+    Handles both multi-line cell format (header and data in same cell)
+    and multi-row format (header and data in separate rows).
+    """
+    cols = [v for v in mapping.values() if v is not None]
+    if not cols:
+        return []
+    packed_col = cols[0]
+
+    data_lines = _collect_packed_lines(sheet, header_row, packed_col)
+
+    parts = []
+    for line in data_lines:
+        part = _parse_packed_line(line, path, warn)
+        if part:
+            parts.append(part)
+
+    return parts
+
+
 # ---- packing-list (English Receipt/Packing List) parsing --------------
 
 def _find_packing_header(sheet):
@@ -604,6 +732,9 @@ def parse_source(path, warn=None) -> list:
     for sheet in _open_sheets(path):
         header_row, mapping = _find_header_row(sheet)
         if header_row is not None:
+            if _is_packed_format(mapping):
+                parts.extend(_parse_packed_sheet(sheet, mapping, header_row, path, warn))
+                continue
             parts.extend(_parse_standard(sheet, mapping, header_row, path, warn))
             continue
         parts.extend(_parse_packing_sheet(sheet, path, warn))
