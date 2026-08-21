@@ -40,9 +40,9 @@ class Part:
 
 
 HEADER_ALIASES = {
-    "name": ("备件名称", "名称", "备件", "品名", "物料名称", "物资名称", "名称及规格", "名称/规格", "part name", "name", "item"),
-    "type": ("型号", "规格", "型号规格", "规格型号", "物资规格", "物资规格/品牌", "规格/品牌", "type", "spec", "model", "品牌"),
-    "qty": ("数量", "件数", "qty", "quantity", "数量/套", "数量  "),
+    "name": ("备件名称", "名称", "备件", "品名", "物料名称", "物资名称", "名称及规格", "名称/规格", "part name", "name", "description", "description of goods", "des", "particulars", "particular"),
+    "type": ("型号", "规格", "型号规格", "规格型号", "物资规格", "物资规格/品牌", "规格/品牌", "type", "spec", "model", "品牌", "part no", "part no.", "parts no", "parts no."),
+    "qty": ("数量", "件数", "qty", "quantity", "数量/套", "数量  ", "q'ty", "qtt"),
     "unit": ("单位", "unit", "计量单位", "单位  "),
     "weight": ("重量", "重量(kg)", "weight", "单重", "毛重"),
     "price": ("单价", "单价/rmb", "unit price", "price", "价格"),
@@ -53,11 +53,16 @@ _CONTAINS_RULES = (
     ("名称及规格", "name"),
     ("名称", "name"),
     ("品名", "name"),
+    ("description", "name"),
+    ("des", "name"),
     ("规格", "type"),
     ("型号", "type"),
     ("品牌", "type"),
+    ("part no", "type"),
     ("数量", "qty"),
     ("件数", "qty"),
+    ("q'ty", "qty"),
+    ("qty", "qty"),
     ("单位", "unit"),
     ("重量", "weight"),
     ("单价", "price"),
@@ -71,6 +76,9 @@ _QTY_RE = re.compile(
     re.IGNORECASE,
 )
 _END_RE = re.compile(r"end\s+of\s+listing", re.IGNORECASE)
+
+# Detects a line starting with a sequence number or checkbox+number (multi-part format)
+_SEQ_PREFIX_RE = re.compile(r"^[✓✗☐☑\u2713\u2717\u2714\u2716\u2718\u2610\u2611\u2612工\s]*\d+(?:\.\d+)?\s")
 
 _IRRELEVANT_RE = re.compile(
     r"^\s*(?:"
@@ -159,6 +167,25 @@ def _is_irrelevant(text: str) -> bool:
     if re.fullmatch(r"[\d.,\-()（）\s]+", text):
         return True
     return bool(_IRRELEVANT_RE.match(text))
+
+
+_CHECKBOX_CHARS = "✓✗☐☑\u2713\u2717\u2714\u2716\u2718\u2610\u2611\u2612工"
+
+
+def _strip_seq(text: str) -> str:
+    """Strip leading sequence number / checkbox char and trailing sequence number
+    from padded part names (e.g. Sheet10 '工  INTERMEDIATE RELAY   1' → 'INTERMEDIATE RELAY')."""
+    text = text.strip()
+    # Strip leading checkbox character followed by whitespace
+    m = re.match(f'^[{_CHECKBOX_CHARS}\\s]+', text)
+    text = text[m.end():] if m else text
+    # Strip leading number + 2+ spaces (sequence number prefix)
+    m = re.match(r"^\d+(?:\.\d+)?[\s\u3000]{2,}", text)
+    text = text[m.end():] if m else text
+    # Strip trailing spaces + number (sequence number suffix)
+    m = re.search(r"[\s\u3000]{2,}\d+(?:\.\d+)?\s*$", text)
+    text = text[: m.start()] if m else text
+    return text.strip()
 
 
 class _Cell:
@@ -257,11 +284,96 @@ def _find_header_row(sheet):
     return None, None
 
 
-_SIGNATURE_KEYWORDS = ("签字", "签收", "盖章", "供船", "签收日期")
+_SIGNATURE_KEYWORDS = (
+    "签字", "签收", "盖章", "供船", "签收日期", "交货地址", "请核对", "核对",
+    "日 期", "signed", "signature", "received", "place of supply",
+    "date of supply", "please check",
+)
 
 
 def _is_signature(text: str) -> bool:
-    return any(k in text for k in _SIGNATURE_KEYWORDS)
+    low = " ".join(str(text).lower().split())
+    return any(k in low for k in _SIGNATURE_KEYWORDS)
+
+
+def _split_lines(val) -> list:
+    """Split a cell value by newlines, returning a list of stripped strings."""
+    if val is None:
+        return []
+    return [s.strip() for s in str(val).split("\n")]
+
+
+def _find_unit_column(cells, name_col, qty_col, unit_col, type_col):
+    """When unit_col is missing or equals qty_col, search data cells for a
+    column holding multi-line non-numeric values (units like PC, SET, MTR)."""
+    if unit_col and unit_col != qty_col:
+        return unit_col
+    for cell in cells:
+        if cell.column in (name_col, qty_col, type_col):
+            continue
+        val = _to_text(cell.value)
+        if not val or "\n" not in val:
+            continue
+        lines = [s.strip() for s in val.split("\n")]
+        lines = [l for l in lines if l]
+        if lines and all(not _to_number(l) and len(l) <= 12 for l in lines):
+            return cell.column
+    return unit_col
+
+
+def _parse_multiline_row(cells, mapping, path, warn) -> list:
+    """Parse a row where the name column has multiple newline-separated parts
+    (each line prefixed with a sequence number)."""
+    name_col = mapping["name"]
+    qty_col = mapping["qty"]
+    type_col = mapping.get("type")
+    if type_col == name_col:
+        type_col = None
+    unit_col = mapping.get("unit")
+    weight_col = mapping.get("weight")
+    price_col = mapping.get("price")
+
+    name_lines = _split_lines(cells[name_col - 1].value)
+    name_lines = [l for l in name_lines if l]
+    if not name_lines:
+        return []
+
+    qty_lines = _split_lines(cells[qty_col - 1].value) if qty_col else []
+    if len(qty_lines) == 1 and len(name_lines) > 1:
+        qty_lines = qty_lines * len(name_lines)
+
+    actual_unit_col = _find_unit_column(cells, name_col, qty_col, unit_col, type_col)
+    unit_lines = _split_lines(cells[actual_unit_col - 1].value) if actual_unit_col else []
+    if len(unit_lines) == 1 and len(name_lines) > 1:
+        unit_lines = unit_lines * len(name_lines)
+
+    type_lines = _split_lines(cells[type_col - 1].value) if type_col else []
+    if len(type_lines) == 1 and len(name_lines) > 1:
+        type_lines = type_lines * len(name_lines)
+
+    parts = []
+    for idx, line in enumerate(name_lines):
+        name = _clean(_strip_seq(line))
+        if not name or _is_signature(name):
+            continue
+        qty = _to_number(qty_lines[idx]) if idx < len(qty_lines) else None
+        if qty is None:
+            if warn:
+                warn(f"{path.name} 第 {cells[0].row} 行第 {idx+1} 个备件缺少数量，按 1 处理: {name}")
+            qty = 1.0
+        unit = unit_lines[idx].strip() if idx < len(unit_lines) else None
+        part_type = type_lines[idx].strip() if idx < len(type_lines) else None
+        parts.append(
+            Part(
+                name=name,
+                qty=qty,
+                unit=unit or "个",
+                type=part_type,
+                weight=_to_number(cells[weight_col - 1].value) if weight_col else None,
+                price=_to_number(cells[price_col - 1].value) if price_col else None,
+            )
+        )
+    return parts
 
 
 def _parse_standard(sheet, mapping, header_row, path, warn) -> list:
@@ -278,8 +390,43 @@ def _parse_standard(sheet, mapping, header_row, path, warn) -> list:
     for cells in sheet.iter_rows():
         if cells[0].row <= header_row:
             continue
-        name = _to_text(cells[name_col - 1].value)
-        if name is None:
+        raw_name = cells[name_col - 1].value
+        if raw_name is None:
+            continue
+
+        # Multi-line cell: check if it's a multi-part format (lines start with seq numbers)
+        if "\n" in str(raw_name):
+            raw_lines = str(raw_name).split("\n")
+            seq_count = sum(1 for l in raw_lines if _SEQ_PREFIX_RE.match(l.strip()))
+            if seq_count >= 2:
+                parts.extend(_parse_multiline_row(cells, mapping, path, warn))
+                continue
+            # Single part with multi-line name — collapse newlines to spaces
+            name = _clean(_strip_seq(str(raw_name)))
+            if not name:
+                continue
+            if _is_signature(name):
+                continue
+            qty = _to_number(cells[qty_col - 1].value)
+            if qty is None:
+                if warn:
+                    warn(f"{path.name} 第 {cells[0].row} 行缺少数量，按 1 处理: {name}")
+                qty = 1.0
+            unit = _to_text(cells[unit_col - 1].value) if unit_col else None
+            parts.append(
+                Part(
+                    name=name,
+                    qty=qty,
+                    unit=unit or "个",
+                    type=_clean(cells[type_col - 1].value) if type_col else None,
+                    weight=_to_number(cells[weight_col - 1].value) if weight_col else None,
+                    price=_to_number(cells[price_col - 1].value) if price_col else None,
+                )
+            )
+            continue
+
+        name = _clean(_strip_seq(str(raw_name)))
+        if not name:
             continue
         if _is_signature(name):
             continue  # signature / footer rows must not become parts
@@ -294,7 +441,7 @@ def _parse_standard(sheet, mapping, header_row, path, warn) -> list:
                 name=name,
                 qty=qty,
                 unit=unit or "个",
-                type=_to_text(cells[type_col - 1].value) if type_col else None,
+                type=_clean(cells[type_col - 1].value) if type_col else None,
                 weight=_to_number(cells[weight_col - 1].value) if weight_col else None,
                 price=_to_number(cells[price_col - 1].value) if price_col else None,
             )
@@ -315,7 +462,8 @@ def _find_packing_header(sheet):
     for cells in sheet.iter_rows():
         texts = [_clean(c.value) for c in cells if c.value is not None]
         joined = " ".join(texts).lower()
-        if "item" not in joined or "quantity" not in joined:
+        qty_found = "quantity" in joined or "qty" in joined or "q'ty" in joined or "qtt" in joined
+        if "item" not in joined or not qty_found:
             continue
         exclude = set()
         for c in cells:
@@ -601,6 +749,7 @@ def _split_zh_en(val: str):
             zh = m.group(0).strip()
             val = (val[: m.start()] + val[m.end():]).strip()
     en = val.strip().strip(": ")
+    en = re.sub(r"[^A-Za-z0-9\u4e00-\u9fff]+$", "", en)  # strip trailing punctuation
     if zh is None and not en:
         return None, None
     return zh, en or None

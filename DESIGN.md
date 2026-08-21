@@ -73,11 +73,21 @@ D:\CDF_helper\
 
 - 统一封装 `_Sheet` / `_Cell`，同时支持 xlrd（.xls）与 openpyxl（.xlsx）；`parse_source` 遍历**全部工作表**，每张表独立解析（多 sheet 的装箱单各自为一组备件）。
 - **表头自动识别**（`_find_header_row`）：
-  1. 逐行扫描，先按 `HEADER_ALIASES` 精确匹配（规范化后：去空格、小写）。
-  2. 未精确命中时按 `_CONTAINS_RULES` 包含匹配（优先级：名称 > 规格/型号 > 数量 > 单位 > 重量 > 单价）。
+  1. 逐行扫描，先按 `HEADER_ALIASES` 精确匹配（规范化后：去空格、小写）。"item" 不再映射为名称列（避免将 `ITEM` 序号列误识别为名称），改为通过 `description`/`particulars` 别名识别名称列。
+  2. 未精确命中时按 `_CONTAINS_RULES` 包含匹配（优先级：名称 > 规格/型号 > 数量 > 单位 > 重量 > 单价）。新增 `description`→名称、`q'ty`→数量、`part no`→规格的包含规则。
   3. 当某行同时识别到 `name` 与 `qty` 即视为表头行。
-- 数据行按列读入；缺少数量按 1 处理并回调 `warn()` 提示；`_to_number` 支持千分位/全角逗号/提取首个数（正则兜底）。
-- **英文 Receipt/Packing List**（如远通海事，表头含 `Item/Quantity(Unit)/Particulars` 或 `Description`，或仅 `Item/Quantity(Unit)`，数量形如 `N PCE`，以 `** End of Listing **` 结尾）：表头行内找不到 `name+qty` 时自动回退到 `_parse_packing_sheet` 启发式解析——按行抓数量（`_QTY_RE`，仅识别英文单位，避免中文描述如"每条总长11米"误判）、从同行/后续行收集名称与 `Type:` 规格，直至下一数量行或清单末尾；`Part No / Serial No / Dwg.*` 列按表头标注自动排除，不混入名称；缺名称的条目记占位符 `(未填写名称)` 并告警；签名/网址/分隔线等页脚碎片会被 `_trim_footer`/`_clean_name` 剔除。
+- **多行单元格解析**（`_parse_multiline_row`）：当名称列单元格包含换行符且**至少 2 行以序号前缀**（`_SEQ_PREFIX_RE` 匹配 `\d+\s` 或 `✓/工 + 空格 + 数字`）开头时，自动按换行分割多行，逐行创建备件 —— 适配如 Sheet8 格式（列 A 含 `1  PLASTIC SHELL...\n2  1PLASTIC...`，列 F 含数量，列 H 含单位 PC/SET）。
+  - 数量/单位各列换行按行号对齐；若单位列缺失或与数量列相同，`_find_unit_column` 自动扫描数据列寻找非数值短文本（如 PC/SET/MTR）。
+  - 单值列在多行时自动重复。
+  - 非多行格式的多行名称（如 `thremostatic\nexpansion valve`）仍作为单一备件处理，换行被清洗为空格。
+- **序号清洗**（`_strip_seq`）：对单个单元格的名称执行以下清洗——
+  1. 去除前导的复选框字符（`工 ✓ ☑` 等）；
+  2. 去除前导序号 + 2 空格以上（如 `2    INTERMEDIATE RELAY` → `INTERMEDIATE RELAY`）；
+  3. 去除尾随序号（如 `INTERMEDIATE RELAY   1` → `INTERMEDIATE RELAY`）。
+- 数据行按列读入；缺少数量按 1 处理并回调 `warn()` 提示；`_to_number` 支持千分位/全角逗号/提取首个数（正则公底）；名称/规格/类型等文本通过 `_clean` 规范（折叠换行为空格）。
+- **英文 Receipt/Packing List**（如远通海事，表头含 `Item/Quantity(Unit)/Particulars` 或 `Description`，或仅 `Item/Quantity(Unit)`，数量形如 `N PCE`，以 `** End of Listing **` 结尾）：表头行内找不到 `name+qty` 时自动回退到 `_parse_packing_sheet` 启发式解析——按行抓数量（`_QTY_RE`，仅识别英文单位，避免中文描述如"每条总长11米"误判）、从同行/后续行收集名称与 `Type:` 规格，直至下一数量行或清单末尾；`Part No / Serial No / Dwg.*` 列按表头标注自动排除，不混入名称；缺名称的条目记占位符 `(未填写名称)` 并告警；签名/网址/分隔线等页脚碎片会被 `_trim_footer`/`_clean_name` 剔除。`_find_packing_header` 现在也识别 `qty`/`q'ty` 而非仅 `quantity`。
+- **页脚过滤**（`_SIGNATURE_KEYWORDS` + `_is_signature`）：扩展关键词表，新增英文页脚词（`signed`、`received`、`place of supply`、`date of supply`、`please check`）、中文页脚词（`交货地址`、`请核对`、`核对`、`日 期`）；匹配前统一折叠空白并小写，避免 `"place  of  Supply:"` 因双空格失效。
+- **船名尾部清洗**（`_split_zh_en`）：英文船名末尾的非字母数字字符（如 `YINNIAN-` 中的连字符）会被剔除。
 - 中文签收单/清单：数据区中 `签字/签收/盖章/供船` 等签名行或页脚文件名会被跳过，不会当成备件。
 - `detect_vessel(paths)`：逐行匹配 `船名[:：]xxx`、`船名/单位` 右邻单元格、或 `Vessel Name` 行（含跨格值，优先取括号内中文船名）。
 - **中英文船名对照表**：根目录 `中英文船名25-5-14.xls` 的 sheet 内按列对排列 `中文船名：/英文名：`（含 `英文名是拼音：` 列）。`load_vessel_names` 解析出 `(zh2en, en2zh)` 双向映射；`detect_vessel_pair` 从来源返回 `(chinese, english)`（`Vessel Name` 等行的 `COSMERRY LAKE(遠怡湖)` 或 `船名` 行拆中英文）；`bilingual_vessel` 合成 `中文 英文`（优先用英文名反查，规避来源繁体 vs 对照表简体的差异，`_zh_key` 做轻量繁→简转换）。
@@ -143,8 +153,9 @@ class Part:
 | --- | --- |
 | `test_ai.py` | 只补缺失值；缓存命中不再调 API；API 失败保持空白；JSON 包裹兼容 |
 | `test_web.py` | 首页渲染、服务器文件生成、下载完整性、上传路径、无来源报错、AI 流程、无 Key 报错 |
+| `test_packing.py` | 英文 Packing List 多行/多 Sheet 解析、Item/Quantity(Unit)/Particulars 表头识别、`End of Listing` 结束标记 |
 
-运行：`python test_ai.py && python test_web.py`
+运行：`python test_ai.py && python test_web.py && python test_packing.py`
 
 ## 8. 已知限制与未来扩展
 
