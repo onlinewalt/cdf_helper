@@ -323,35 +323,76 @@ def _find_unit_column(cells, name_col, qty_col, unit_col, type_col):
     return unit_col
 
 
-def _parse_multiline_row(cells, mapping, path, warn) -> list:
-    """Parse a row where the name column has multiple newline-separated parts
-    (each line prefixed with a sequence number)."""
+def _resolve_cols(mapping):
+    """Resolve column numbers from a header *mapping* dict.
+
+    Returns ``(name_col, qty_col, type_col, unit_col, weight_col, price_col)``.
+    *type_col* is forced to ``None`` when it overlaps *name_col*, since a single
+    column cannot hold both the part name and its spec/model.
+    """
     name_col = mapping["name"]
     qty_col = mapping["qty"]
     type_col = mapping.get("type")
     if type_col == name_col:
         type_col = None
-    unit_col = mapping.get("unit")
-    weight_col = mapping.get("weight")
-    price_col = mapping.get("price")
+    return (
+        name_col,
+        qty_col,
+        type_col,
+        mapping.get("unit"),
+        mapping.get("weight"),
+        mapping.get("price"),
+    )
 
-    name_lines = _split_lines(cells[name_col - 1].value)
-    name_lines = [l for l in name_lines if l]
+
+def _cell_value(cells, col):
+    """Return the value of the cell at 1-based column *col*, or ``None``.
+
+    Returns ``None`` when *col* is falsy (missing column), so callers can write
+    ``_cell_value(cells, col)`` instead of the verbose
+    ``cells[col - 1].value if col else None``.
+    """
+    if not col:
+        return None
+    return cells[col - 1].value
+
+
+def _expand_lines(lines, count):
+    """Broadcast a single-element *lines* list to *count* entries.
+
+    A scalar column (one value) that applies to every part in a multi-line cell
+    is replicated so each part gets its own value; lists that already match or
+    exceed *count* are returned unchanged.
+    """
+    if len(lines) == 1 and count > 1:
+        return lines * count
+    return lines
+
+
+def _split_and_expand(cells, col, count):
+    """Retrieve, split (by newline) and expand a cell's lines to *count* entries."""
+    return _expand_lines(_split_lines(_cell_value(cells, col)), count)
+
+
+def _parse_multiline_row(cells, mapping, path, warn) -> list:
+    """Parse a row where the name column has multiple newline-separated parts
+    (each line prefixed with a sequence number)."""
+    name_col, qty_col, type_col, unit_col, weight_col, price_col = _resolve_cols(mapping)
+
+    name_lines = [l for l in _split_lines(_cell_value(cells, name_col)) if l]
     if not name_lines:
         return []
 
-    qty_lines = _split_lines(cells[qty_col - 1].value) if qty_col else []
-    if len(qty_lines) == 1 and len(name_lines) > 1:
-        qty_lines = qty_lines * len(name_lines)
-
+    n = len(name_lines)
+    qty_lines = _split_and_expand(cells, qty_col, n)
     actual_unit_col = _find_unit_column(cells, name_col, qty_col, unit_col, type_col)
-    unit_lines = _split_lines(cells[actual_unit_col - 1].value) if actual_unit_col else []
-    if len(unit_lines) == 1 and len(name_lines) > 1:
-        unit_lines = unit_lines * len(name_lines)
+    unit_lines = _split_and_expand(cells, actual_unit_col, n)
+    type_lines = _split_and_expand(cells, type_col, n)
 
-    type_lines = _split_lines(cells[type_col - 1].value) if type_col else []
-    if len(type_lines) == 1 and len(name_lines) > 1:
-        type_lines = type_lines * len(name_lines)
+    # weight & price are constant across all lines in this row — compute once
+    row_num = cells[0].row
+    weight = _to_number(_cell_value(cells, weight_col)) if weight_col else None
+    price = _to_number(_cell_value(cells, price_col)) if price_col else None
 
     parts = []
     for idx, line in enumerate(name_lines):
@@ -361,7 +402,7 @@ def _parse_multiline_row(cells, mapping, path, warn) -> list:
         qty = _to_number(qty_lines[idx]) if idx < len(qty_lines) else None
         if qty is None:
             if warn:
-                warn(f"{path.name} 第 {cells[0].row} 行第 {idx+1} 个备件缺少数量，按 1 处理: {name}")
+                warn(f"{path.name} 第 {row_num} 行第 {idx+1} 个备件缺少数量，按 1 处理: {name}")
             qty = 1.0
         unit = unit_lines[idx].strip() if idx < len(unit_lines) else None
         part_type = type_lines[idx].strip() if idx < len(type_lines) else None
@@ -371,28 +412,31 @@ def _parse_multiline_row(cells, mapping, path, warn) -> list:
                 qty=qty,
                 unit=unit or "个",
                 type=part_type,
-                weight=_to_number(cells[weight_col - 1].value) if weight_col else None,
-                price=_to_number(cells[price_col - 1].value) if price_col else None,
+                weight=weight,
+                price=price,
             )
         )
     return parts
 
 
 def _parse_standard(sheet, mapping, header_row, path, warn) -> list:
-    name_col = mapping["name"]
-    qty_col = mapping["qty"]
-    type_col = mapping.get("type")
-    if type_col == name_col:
-        type_col = None
-    unit_col = mapping.get("unit")
-    weight_col = mapping.get("weight")
-    price_col = mapping.get("price")
+    name_col, qty_col, type_col, unit_col, weight_col, price_col = _resolve_cols(mapping)
+
+    def make_part(cells, name, qty, unit):
+        return Part(
+            name=name,
+            qty=qty,
+            unit=unit or "个",
+            type=_clean(_cell_value(cells, type_col)) if type_col else None,
+            weight=_to_number(_cell_value(cells, weight_col)) if weight_col else None,
+            price=_to_number(_cell_value(cells, price_col)) if price_col else None,
+        )
 
     parts = []
     for cells in sheet.iter_rows():
         if cells[0].row <= header_row:
             continue
-        raw_name = cells[name_col - 1].value
+        raw_name = _cell_value(cells, name_col)
         if raw_name is None:
             continue
 
@@ -403,51 +447,21 @@ def _parse_standard(sheet, mapping, header_row, path, warn) -> list:
             if seq_count >= 2:
                 parts.extend(_parse_multiline_row(cells, mapping, path, warn))
                 continue
-            # Single part with multi-line name — collapse newlines to spaces
-            name = _clean(_strip_seq(str(raw_name)))
-            if not name:
-                continue
-            if _is_signature(name):
-                continue
-            qty = _to_number(cells[qty_col - 1].value)
-            if qty is None:
-                if warn:
-                    warn(f"{path.name} 第 {cells[0].row} 行缺少数量，按 1 处理: {name}")
-                qty = 1.0
-            unit = _to_text(cells[unit_col - 1].value) if unit_col else None
-            parts.append(
-                Part(
-                    name=name,
-                    qty=qty,
-                    unit=unit or "个",
-                    type=_clean(cells[type_col - 1].value) if type_col else None,
-                    weight=_to_number(cells[weight_col - 1].value) if weight_col else None,
-                    price=_to_number(cells[price_col - 1].value) if price_col else None,
-                )
-            )
-            continue
-
+            # Single part with multi-line name — fall through; _clean collapses newlines
         name = _clean(_strip_seq(str(raw_name)))
+
         if not name:
             continue
         if _is_signature(name):
             continue  # signature / footer rows must not become parts
-        qty = _to_number(cells[qty_col - 1].value)
+
+        qty = _to_number(_cell_value(cells, qty_col))
         if qty is None:
             if warn:
                 warn(f"{path.name} 第 {cells[0].row} 行缺少数量，按 1 处理: {name}")
             qty = 1.0
-        unit = _to_text(cells[unit_col - 1].value) if unit_col else None
-        parts.append(
-            Part(
-                name=name,
-                qty=qty,
-                unit=unit or "个",
-                type=_clean(cells[type_col - 1].value) if type_col else None,
-                weight=_to_number(cells[weight_col - 1].value) if weight_col else None,
-                price=_to_number(cells[price_col - 1].value) if price_col else None,
-            )
-        )
+        unit = _to_text(_cell_value(cells, unit_col)) if unit_col else None
+        parts.append(make_part(cells, name, qty, unit))
     return parts
 
 
