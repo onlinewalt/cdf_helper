@@ -101,6 +101,42 @@ def test_synthetic():
         assert detect_vessel_pair([path]) == ("测试船", "VESSEL-A")
 
 
+def _write_embedded_end_workbook(path: Path):
+    """A packing list whose '** End of Listing **' text is embedded inside a data
+    row's cell (e.g. a Serial No. cell) rather than sitting on its own footer row."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "Item"
+    ws["B1"] = "Quantity(Unit)"
+    ws["C1"] = "Description"
+    ws["D1"] = "Serial No"
+    ws["A2"] = "1"
+    ws["B2"] = "24 PCS"
+    ws["C2"] = "CASMSA-26030-0000 Main Contactor Contact"
+    ws["D2"] = (
+        "Serial No. : 7251785\n"
+        "(Winch) head anchor windlass\n"
+        "** End of Listing **\n"
+        "Signature and Chop"
+    )
+    wb.save(path)
+
+
+def test_end_of_listing_embedded_in_data():
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "embedded_end.xlsx"
+        _write_embedded_end_workbook(path)
+
+        warns = []
+        parts = parse_source(path, warn=warns.append)
+
+        assert len(parts) == 1, parts
+        assert parts[0].name == "CASMSA-26030-0000 Main Contactor Contact", parts[0].name
+        assert parts[0].qty == 24 and parts[0].unit == "PCS", parts[0]
+    print("embedded End of Listing test OK")
+
+
 def test_vessel_lookup():
     lookup = Path("中英文船名25-5-14.xls")
     if not lookup.exists():
@@ -232,6 +268,7 @@ def test_packed_real_file_if_present():
 
 if __name__ == "__main__":
     test_synthetic()
+    test_end_of_listing_embedded_in_data()
     test_packed_synthetic()
     test_vessel_lookup()
     test_packed_real_file_if_present()

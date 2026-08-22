@@ -649,6 +649,12 @@ def _parse_packing_sheet(sheet, path, warn) -> list:
     for idx in range(header_row, sheet.last_row + 1):
         text = " ".join(_clean(c.value) for c in rows[idx - 1] if c.value is not None)
         if _END_RE.search(text):
+            # "End of Listing" is sometimes embedded inside a data row's cell
+            # (e.g. a Serial No. cell carrying the marker between sections)
+            # rather than sitting on its own footer row. A genuine footer row
+            # carries no item quantity; only truncate on those.
+            if _QTY_RE.search(text):
+                continue
             end = idx
             break
 

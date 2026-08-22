@@ -160,7 +160,7 @@ class Part:
 | --- | --- |
 | `test_ai.py` | 只补缺失值；缓存命中不再调 API；API 失败保持空白；JSON 包裹兼容 |
 | `test_web.py` | 首页渲染、服务器文件生成、下载完整性、上传路径、无来源报错、AI 流程、无 Key 报错 |
-| `test_packing.py` | 英文 Packing List 多行/多 Sheet 解析、Item/Quantity(Unit)/Particulars 表头识别、`End of Listing` 结束标记 |
+| `test_packing.py` | 英文 Packing List 多行/多 Sheet 解析、Item/Quantity(Unit)/Particulars 表头识别、`End of Listing` 结束标记；回归 `End of Listing` 嵌入数据行单元格的误判 |
 
 运行：`python test_ai.py && python test_web.py && python test_packing.py`
 
@@ -170,3 +170,8 @@ class Part:
 - 来源中同名不同规格（如 M22/M24 螺栓）取消“拼接规格”后会丢失区分信息，默认保持拼接。
 - 表头识别依赖中英文别名表，遇到新表头格式需扩充 `HEADER_ALIASES` / `_CONTAINS_RULES`。
 - 可选扩展：多页分页/打印区域设置、历史记录管理、批量任务队列、其他 LLM 提供商接入、表单重量/单价人工复核界面。
+
+## 9. 近期修复记录
+
+- **`End of Listing` 嵌入数据行单元格的误判**：部分真实装箱单会把 `** End of Listing **` 放在数据行的单元格内部（如 Serial No. 单元格），而非独占的页脚行。旧逻辑在行联文本上搜索该标记并截止数据范围，导致把数据行自身排除在外，从而解析到 0 个备件并抛出 `ValueError("…没有解析到备件数据")`。修复：范围扫描时，若含标记的行同时含有数量（`_QTY_RE`），视为数据行而非截止边界，仅真正无数量的页脚行才截止。回归测试见 `test_end_of_listing_embedded_in_data`。
+- **多项目限**：单个数据行内堆叠多条物料（跨换行对齐的多列单元格，多个 `N PCE` 数量）暂仅提取首个数量；如需完整解析，建议将文件改为每行一条物料。
