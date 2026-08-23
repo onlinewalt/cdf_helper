@@ -15,7 +15,7 @@ import webbrowser
 from pathlib import Path
 
 from cdf_helper import config as app_config
-from cdf_helper.generator import generate, sanitize_filename
+from cdf_helper.generator import generate, sanitize_filename, validate_template
 from cdf_helper.parser import (
     parse_sources,
     detect_vessel,
@@ -168,6 +168,11 @@ def main(argv=None):
         print(f"错误：找不到模板文件 {template}")
         return 1
 
+    template_error = validate_template(template)
+    if template_error:
+        print(f"错误：{template_error}")
+        return 1
+
     if args.source:
         sources = [Path(s) for s in args.source]
     else:
@@ -231,14 +236,18 @@ def main(argv=None):
     output_name = f"{sanitize_filename(vessel)}-{sanitize_filename(port)}-{REPORT_LABEL}-{sanitize_filename(date)}.xlsx"
 
     print(f"正在生成报关清单 {output_name} ...")
-    out = generate(
-        template_path=template,
-        parts=parts,
-        vessel_name=vessel,
-        output_dir=output_dir,
-        output_name=output_name,
-        include_spec=not args.name_only,
-    )
+    try:
+        out = generate(
+            template_path=template,
+            parts=parts,
+            vessel_name=vessel,
+            output_dir=output_dir,
+            output_name=output_name,
+            include_spec=not args.name_only,
+        )
+    except ValueError as e:
+        print(f"错误：{e}")
+        return 1
     print(f"完成：{out}  （共 {len(parts)} 条备件）")
     return 0
 

@@ -67,6 +67,17 @@ D:\CDF_helper\
 
 样式策略：从模板采样行的单元格复制 `_style`（字体、边框、对齐、底纹）应用到新行，保证生成结果与模板完全一致。
 
+### 模板验证（Pre-flight）
+
+由于生成器将数据写入**硬编码的** 单元格位置（Sheet1 / 行 2 表头 / 行 3-6 样例数据 / 行 7 合计行 / 列 A-G），而**不**动态读取表头来推断列映射，一个布局不符的模板会导致**静默的数据错位**（例如把“单价”写到“重量”列）。为防范此风险，`generate()` 在执行任何写操作前调用 `_validate_template_layout()`，检查：
+
+1. **工作表名** 必须为 `Sheet1`（否则 `KeyError` 崩溃）；
+2. **表头行**（第 2 行）7 个单元格的值必须与标准表头 `序号 / 备件名称 / 数量 / 单位 / 重量(KG) / 单价/RMB / 金额RMB` 完全匹配；
+3. **合计行**（第 7 行）第一列必须为 `合计`；
+4. **文件格式** 必须为 `.xlsx`（旧版 `.xls` 由 openpyxl 不支持）。
+
+验证失败将抛出 `ValueError`，Web 层在 `POST /generate` 时提前捕获并通过 `flash` 显示清晰的中文错误提示（例如“模板表头不符：B2 期望‘备件名称’ 实际为‘名称’”），CLI 层在 `main.py` 中也提前调用 `validate_template()`。用户上传**不同结构**的模板时，不会得到静默损坏的文件，而是立即得到可操作的错误信息。
+
 ## 5. 模块设计
 
 ### 5.1 `cdf_helper/parser.py` — 来源解析
@@ -114,7 +125,8 @@ class Part:
 
 ### 5.2 `cdf_helper/generator.py` — 生成
 
-- `generate(...)`：加载模板 → 写标题 → 清除样例数据 → 按需 `insert_rows` 扩容 → 逐行写入（公式 序号/金额）→ 写合计行 → 清理模板遗留单元格（O7/P7）→ 保存。
+- `validate_template(path)` / `_validate_template_layout(wb)`：模板布局预检（见 §4）。`generate()` 在加载 workbook 后立即调用，任何不符抛出 `ValueError`。
+- `generate(...)`：加载模板 → **验证布局** → 写标题 → 清除样例数据 → 按需 `insert_rows` 扩容 → 逐行写入（公式 序号/金额）→ 写合计行 → 清理模板遗留单元格（O7/P7）→ 保存。
 - `_display_name`：`include_spec=True` 时拼 `名称 + 空格 + 规格`，否则仅名称。
 - `sanitize_filename`：剔除 Windows 非法字符 `\/:*?"<>|` 等，用于输出文件名 `<船名>-<港>-报关清单-<日期>.xlsx`。
 
@@ -137,7 +149,7 @@ class Part:
 ### 5.4 `webapp.py` — Flask Web
 
 - `GET /`：首页，列出服务器根目录可选的模板与来源文件，回填配置中的 API Key。
-- `POST /generate`：处理上传（`template_upload` / `sources_upload`，存入 `uploads/`）或服务器文件选择（`template_path` / `source_paths`）→ 解析 → 可选 DeepSeek → 生成到 `generated/` → 渲染 result 页。
+- `POST /generate`：处理上传（`template_upload` / `sources_upload`，存入 `uploads/`）或服务器文件选择（`template_path` / `source_paths`）→ **模板布局预检**（`validate_template`，提前弹出错误提示，避免浪费解析/AI 时间）→ 解析 → 可选 DeepSeek → 生成到 `generated/` → 渲染 result 页。
 - `GET /download/<file>`：仅允许从 `generated/` 目录内下载（防目录穿越）。
 - 启动时清理 `uploads/`、`generated/` 中超过 7 天的旧文件（`_cleanup_old_files`）。
 - 表单字段：`vessel`（留空自动识别）、`port`、`date`、`include_spec`、`use_ai`、`api_key`、`save_key`。
@@ -167,7 +179,8 @@ class Part:
 ## 8. 已知限制与未来扩展
 
 - 重量/单价为估算值，正式申报前需人工核对。
-- 来源中同名不同规格（如 M22/M24 螺栓）取消“拼接规格”后会丢失区分信息，默认保持拼接。
+- **模板非标准格式受限**：目前仅支持固定布局的模板（Sheet1、标准表头、第 7 行合计）。验证逻辑会拒绝不符的模板而非自适应解析。未来如需支持用户自由排列列的模板，可扩展为动态列映射（读取表头 → 建立字段到列的映射 → 按映射写入），但需同步调整合计行公式与 `insert_rows` 位置。
+- 来源中同名不同规格（如 M22/M24 螆栓）取消“拼接规格”后会丢失区分信息，默认保持拼接。
 - 表头识别依赖中英文别名表，遇到新表头格式需扩充 `HEADER_ALIASES` / `_CONTAINS_RULES`。
 - 可选扩展：多页分页/打印区域设置、历史记录管理、批量任务队列、其他 LLM 提供商接入、表单重量/单价人工复核界面。
 

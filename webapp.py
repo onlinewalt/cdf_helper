@@ -14,7 +14,7 @@ from flask import Flask, abort, flash, redirect, render_template, request, send_
 
 from cdf_helper import config as app_config
 from cdf_helper.ai import enrich_parts
-from cdf_helper.generator import generate, sanitize_filename
+from cdf_helper.generator import generate, sanitize_filename, validate_template
 from cdf_helper.parser import (
     parse_sources,
     detect_vessel,
@@ -135,6 +135,14 @@ def do_generate():
                 template = cand
     if template is None or not template.is_file():
         flash("请选择或上传报关清单模板文件。", "error")
+        return redirect(url_for("index"))
+
+    # Pre-flight: verify the template layout before doing any expensive work
+    # (parsing sources, calling AI, etc.).  Catches mismatched / corrupted
+    # templates early with a clear message instead of a silent corrupt output.
+    template_error = validate_template(template)
+    if template_error:
+        flash(template_error, "error")
         return redirect(url_for("index"))
 
     # --- sources --------------------------------------------------------
