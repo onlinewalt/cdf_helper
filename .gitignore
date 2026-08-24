@@ -6,3 +6,9 @@ generated/
 config.json
 ai_cache.json
 logs/
+
+# Local sample/source data files (not part of the repo, do not commit):
+new file.xlsx
+远棠湾-舟山.xlsx
+远怡湖missing sheets.xlsx
+中远福斯-天津26-8-22.xlsx
