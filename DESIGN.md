@@ -188,3 +188,4 @@ class Part:
 
 - **`End of Listing` 嵌入数据行单元格的误判**：部分真实装箱单会把 `** End of Listing **` 放在数据行的单元格内部（如 Serial No. 单元格），而非独占的页脚行。旧逻辑在行联文本上搜索该标记并截止数据范围，导致把数据行自身排除在外，从而解析到 0 个备件并抛出 `ValueError("…没有解析到备件数据")`。修复：范围扫描时，若含标记的行同时含有数量（`_QTY_RE`），视为数据行而非截止边界，仅真正无数量的页脚行才截止。回归测试见 `test_end_of_listing_embedded_in_data`。
 - **多项目限**：单个数据行内堆叠多条物料（跨换行对齐的多列单元格，多个 `N PCE` 数量）暂仅提取首个数量；如需完整解析，建议将文件改为每行一条物料。
+- **OCR/错别字表头容错**：英文 Packing List 的表头标签常见 OCR 偏错（如 `ftem`/`tem` 形似 `Item`，`Quanty` 形似 `Quantity`，`Descriptlon`/`Dascriptlon` 形似 `Description`，`Num` 作数量列）。`_find_packing_header` 在子串匹配失败时改为对 alnum 小写分词做编辑距离 ≤2 的模糊匹配，并把 `quant`/`num` 作为数量标签；仅当同行同时出现 Item 类与 Quantity 类标记时才判定为表头，从而避免把数据行误判为表头。回归见 `test_end_of_listing_embedded_in_data` 及 `test_synthetic`（洁净表头仍原样识别）。

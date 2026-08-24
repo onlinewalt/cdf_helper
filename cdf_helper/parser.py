@@ -593,19 +593,72 @@ def _parse_packed_sheet(sheet, mapping, header_row, path, warn) -> list:
 
 # ---- packing-list (English Receipt/Packing List) parsing --------------
 
+_PACKING_TOKENS_ITEM = ("item",)
+
+
+def _tokens(text: str):
+    """Alphabetic, lowercased tokens of a cell/row text (punctuation & digits dropped)."""
+    return [t for t in re.findall(r"[A-Za-z]+", text.lower()) if t]
+
+
+def _close_enough(token: str, keywords, max_dist=2) -> bool:
+    """True if `token` is within `max_dist` (Levenshtein) of any keyword — OCR-tolerant."""
+    for kw in keywords:
+        if _dist(token, kw) <= max_dist:
+            return True
+    return False
+
+
+def _dist(a: str, b: str) -> int:
+    """Levenshtein edit distance between two lowercased strings."""
+    a, b = a.lower(), b.lower()
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost))
+        prev = cur
+    return prev[-1]
+
+
 def _find_packing_header(sheet):
     """Return (header_row, exclude_cols).
 
-    A packing header is a row containing both "item" and "quantity" (the
-    particulars/description label may be missing or named "Description").
-    Columns labelled Part No / Serial No / Dwg.* are metadata and excluded
-    from name extraction.
+    A packing header is a row containing both an *Item*-like label and a
+    *Quantity*-like label (the particulars/description label may be missing or
+    named "Description"). Columns labelled Part No / Serial No / Dwg.* are
+    metadata and excluded from name extraction.
+
+    Header recognition is OCR-tolerant: in addition to the usual exact
+    substrings, common OCR corruptions are accepted, e.g. "ftem"/"tem" for
+    Item, "Quanty" for Quantity, "DescriPtion" typos, and "Num" for a count
+    column. This is safe because a genuine footer/data row never carries both an
+    item-like and a quantity-like token.
     """
     for cells in sheet.iter_rows():
         texts = [_clean(c.value) for c in cells if c.value is not None]
         joined = " ".join(texts).lower()
-        qty_found = "quantity" in joined or "qty" in joined or "q'ty" in joined or "qtt" in joined
-        if "item" not in joined or not qty_found:
+        tokens = _tokens(joined)
+        qty_found = (
+            "quantity" in joined
+            or "qty" in joined
+            or "q'ty" in joined
+            or "qtt" in joined
+            or "quant" in joined          # covers "Quantity(Uni)", OCR "Quanty"
+            or "num" in joined            # covers a count column labelled "Num"
+        )
+        item_found = (
+            "item" in joined
+            or any(_close_enough(t, _PACKING_TOKENS_ITEM) for t in tokens)
+        )
+        if not item_found or not qty_found:
             continue
         exclude = set()
         for c in cells:
