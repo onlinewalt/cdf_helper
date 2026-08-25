@@ -1,10 +1,9 @@
 """Tests for the DeepSeek enrichment module (with a mocked HTTP backend)."""
-import json
 import sys
 import tempfile
 from pathlib import Path
 
-sys.stdout.reconfigure(encoding="utf-8")
+import pytest
 
 from cdf_helper.ai import AIProvider
 from cdf_helper.parser import Part
@@ -72,4 +71,5 @@ def test_json_fenced_response():
         assert parts[0].weight == 7.0 and parts[0].price == 55.0
 
 
-print("AI module tests PASSED")
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__, "-v"]))

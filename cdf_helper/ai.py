@@ -162,12 +162,16 @@ class AIProvider:
         for item in items:
             if not isinstance(item, dict) or "id" not in item:
                 continue
-            wid = str(item["id"])
-            weight = item.get("weight_kg")
-            price = item.get("unit_price")
-            mapping[wid] = {
-                "weight_kg": self._to_float(weight),
-                "unit_price": self._to_float(price),
+            try:
+                pos = int(item["id"])
+            except (TypeError, ValueError):
+                continue
+            if not 1 <= pos <= len(batch):
+                continue
+            i = batch[pos - 1][0]
+            mapping[str(i)] = {
+                "weight_kg": self._to_float(item.get("weight_kg")),
+                "unit_price": self._to_float(item.get("unit_price")),
             }
         return mapping
 

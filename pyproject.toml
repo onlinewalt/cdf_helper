@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+testpaths = ["."]
+python_files = ["test_*.py"]
+addopts = "-ra --tb=short"
+filterwarnings = ["ignore::UserWarning:openpyxl"]
+
+[tool.ruff.lint]
+# pyflakes-only gate: catches unused imports / undefined names (real bugs)
+# without failing the build on pre-existing line-length/style debt.
+select = ["F"]

@@ -12,3 +12,11 @@ new file.xlsx
 远棠湾-舟山.xlsx
 远怡湖missing sheets.xlsx
 中远福斯-天津26-8-22.xlsx
+
+# Test / coverage / lint artifacts:
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/

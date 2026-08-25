@@ -5,7 +5,6 @@ Run with:  python main.py        (opens browser at http://127.0.0.1:5000)
 """
 
 import datetime
-import shutil
 import time
 import uuid
 from pathlib import Path

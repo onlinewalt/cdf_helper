@@ -8,13 +8,18 @@ Single-package Python tool (no virtualenv, no build step). Run directly with Pyt
 |---|---|
 | Web UI (starts on port 5000) | `python3 main.py` |
 | CLI generate | `python3 main.py generate --template T.xlsx --source S.xls --vessel "远怡湖 COSMERRY LAKE" --port 上海` |
-| Run all tests | `python3 test_ai.py && python3 test_web.py && python3 test_packing.py` |
-| Run packing parser tests only | `python3 test_packing.py` |
-| Run AI tests only | `python3 test_ai.py` |
+| Run all tests (pytest) | `python3 -m pytest` |
+| Run all tests (standalone) | `python3 test_ai.py && python3 test_web.py && python3 test_packing.py` |
+| Run packing parser tests only | `python3 -m pytest test_packing.py` |
+| Run AI tests only | `python3 -m pytest test_ai.py` |
 
-Install deps (already satisfied in most environments):
+Install runtime deps (already satisfied in most environments):
 ```
 python3 -m pip install -r requirements.txt
+```
+Install dev/test deps (pytest, coverage, ruff):
+```
+python3 -m pip install -r requirements-dev.txt
 ```
 
 ## Architecture
@@ -33,7 +38,7 @@ cdf_helper/
 Entry points:
 - **Web**: `python3 main.py` (no args) → Flask on 127.0.0.1:5000
 - **CLI**: `python3 main.py generate ...`
-- **Tests**: `test_ai.py`, `test_web.py`, `test_packing.py` — each is a standalone script with `if __name__ == "__main__"`
+- **Tests**: `test_ai.py`, `test_web.py`, `test_packing.py` — pytest-based. Each has an `if __name__ == "__main__": pytest.main(...)` guard, so it also runs standalone (`python3 test_*.py`). Shared fixtures live in `conftest.py`.
 
 ## Key conventions
 
@@ -42,7 +47,7 @@ Entry points:
   - Row 2: headers (序号 / 备件名称 / 数量 / 单位 / 重量(KG) / 单价/RMB / 金额RMB)
   - Rows 3–6: sample data (cleared and reused for styling)
   - Row 7: total row (yellow fill)
-- **Source files**: any `.xls`/`.xlsx` in the project root is a candidate. Files containing "船名" are treated as the vessel-name lookup table, not source data. Files containing "报关清单" are treated as templates. `test_web.py` uses `glob("*.xls*")` to pick up both `.xls` and `.xlsx` from root.
+- **Source files**: any `.xls`/`.xlsx` in the project root is a candidate. Files containing "船名" are treated as the vessel-name lookup table, not source data. Files containing "报关清单" are treated as templates. `test_web.py` previously used `glob("*.xls*")` to pick up both `.xls` and `.xlsx` from root.
 - **Packed single-column format**: when all header fields (序号/设备/名称/编号/单位/数量/备注) are in a single cell with 2+ space-separated headers, the parser detects this and uses `_parse_packed_sheet` to extract parts from space-separated data rows. Handles both multi-row (header and data in separate rows) and multi-line cell (header and data in same cell, newline-separated) variants.
 - **Vessel name**: auto-detected from source files. Format: `中文 英文` (e.g., `远怡湖 COSMERRY LAKE`), resolved via `中英文船名25-5-14.xls` lookup workbook. Trailing hyphens in English names (e.g. `YINNIAN-`) are stripped.
 - **AI**: optional (`--ai` flag or "use_ai" checkbox). Key from `--api-key`, `config.json`, or `DEEPSEEK_API_KEY` env var. Results cached in `ai_cache.json` (keyed by `sha1(name|spec)`) to avoid repeat charges. API failures are non-fatal — missing fields stay empty.
@@ -51,12 +56,15 @@ Entry points:
 
 ## Testing notes
 
-- `test_web.py` and `test_packing.py` use `glob` to find real Excel files in the project root. Tests may print "SKIP" if expected files are absent — this is normal.
-- `test_web.py` uses `glob("*.xls*")` to pick up both `.xls` and `.xlsx` from root; filters out template/lookup/duplicate files. Creates an isolated temp `config.json` to avoid clobbering real config.
-- `test_ai.py` mocks `_post_json` — no real API calls.
-- `test_packing.py:test_real_file_if_present` requires files in `uploads/` — skipped if absent.
-- `test_packing.py:test_packed_real_file_if_present` checks `远怡湖missing sheets.xlsx` if present.
-- To run a single test function (not just a file): there's no pytest; run via `python3 -c "import test_packing; test_packing.test_synthetic()"`.
+- Tests run under `pytest`. Each `test_*.py` also runs standalone via its `pytest.main` guard.
+- `test_web.py` is **hermetic**: the template is read from the committed repo fixture and the source workbook is built in memory and uploaded through the Flask client, so it needs **no root data files** and is stable in CI (sample data files like `new file.xlsx`, `远棠湾-舟山.xlsx`, etc. are gitignored).
+- `test_packing.py` and `test_ai.py` are hermetic except for a few explicit "real file" checks, which `pytest.skip()` when their fixture is absent. The committed template workbook (`veseel name-destination port-报关清单-date.xlsx`) and the vessel lookup (`中英文船名25-5-14.xls`) are always available.
+- The AI tests mock the DeepSeek HTTP call (`AIProvider._post_json`) — no network.
+- To run a single test: `python3 -m pytest test_packing.py::test_synthetic` (or filter with `-k test_synthetic`).
+
+## CI
+
+- `.github/workflows/tests.yml` runs on every push/PR: `ruff check .` (pyflakes gate) + `pytest --cov=cdf_helper` with a coverage report artifact.
 
 ## Gotchas
 

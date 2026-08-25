@@ -1,6 +1,5 @@
 """Tests for the packing-list (English Receipt/Packing List) parser, incl. a
 best-effort check against the real uploaded file when present."""
-import os
 import sys
 import tempfile
 from pathlib import Path

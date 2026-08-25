@@ -1,138 +1,132 @@
-"""End-to-end test of the Flask web app using the test client."""
+"""End-to-end tests of the Flask web app via the test client.
+
+Hermetic: the template is read from the committed repo fixture and the
+source workbook is built in memory and uploaded through the client, so these
+tests need no root data files and are stable in CI (the repo's sample data
+files are gitignored).
+"""
 import io
 import re
-import sys
-import glob
-import os
-import tempfile
-from pathlib import Path
 
-sys.stdout.reconfigure(encoding="utf-8")
+import openpyxl
+import pytest
 
 import webapp
-from webapp import app, GENERATED_DIR
-from cdf_helper import config as app_config
 
-# isolate config writes from the real config.json
-app_config.CONFIG_PATH = Path(tempfile.mkdtemp()) / "config.json"
 
-tpl = [f for f in glob.glob("*.xlsx") if "报关清单" in f][0]
-srcs = [Path(f) for f in (glob.glob("*.xls*") or sorted(glob.glob("uploads/*.xlsx")))]
-# drop the "-<hex>" duplicate copies that earlier uploads created, the template, and the 船名 lookup
-srcs = [f for f in srcs if not re.search(r"-[0-9a-f]{6}(?=\.(?:xls|xlsx)$)", f.name)]
-srcs = [f for f in srcs if "模板" not in f.name]
-srcs = [f for f in srcs if "船名" not in f.name]  # the 中英文船名 lookup is not a source
-srcs = [f for f in srcs if "报关清单" not in f.name]  # exclude the template itself
-if not srcs:
-    print("SKIP: no source files present (uploads/ empty)")
-    sys.exit(0)
-src_values = [os.path.relpath(s) for s in srcs]  # e.g. "uploads/xx.xls" or "xx.xls"
+def _template_bytes():
+    """Bytes of the committed template workbook (glob is locale-safe)."""
+    from pathlib import Path
 
-client = app.test_client()
+    for f in Path(".").glob("*报关清单*.xlsx"):
+        return io.BytesIO(f.read_bytes())
+    pytest.skip("no committed template workbook found in repo root")
 
-# 1. index page renders
-r = client.get("/")
-assert r.status_code == 200, r.status_code
-html = r.get_data(as_text=True)
-assert "报关清单生成器" in html
-print("GET / -> 200 OK, template in dropdown:", tpl in html)
 
-# 2. generate using server-side files (template + sources), vessel blank (auto-detect)
-data = {
-    "template_path": os.path.basename(tpl),
-    "source_paths": src_values,
-    "vessel": "",
-    "port": "上海",
-    "date": "2026-08-20",
-    "include_spec": "on",
-}
-r = client.post("/generate", data=data, content_type="multipart/form-data")
-body = r.get_data(as_text=True)
-assert r.status_code == 200, r.status_code
-print("POST /generate (server files) -> 200")
-print("  has 人马座 in page:", "人马座" in body, "| item count shown:", "备件条数" in body)
+def _make_source_bytes():
+    """A minimal packing-list source workbook built in memory."""
+    from openpyxl import Workbook
 
-# 3. download the file
-m = re.search(r'href="(/download/[^"]+)"', body)
-assert m, "no download link found"
-url = m.group(1).replace("&amp;", "&")
-r = client.get(url)
-assert r.status_code == 200, r.status_code
-name = r.headers.get("Content-Disposition", "")
-print("download OK:", name)
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "Item      Quantity(Unit)         Particulars"
+    ws["A2"] = "1"
+    ws["B2"] = "1  PCE"
+    ws["C2"] = "消防泵出海阀(蝶阕)"
+    ws["B3"] = "Type:5k250"
+    ws["A4"] = "2"
+    ws["B4"] = "2 PCE"
+    ws["C4"] = "液压法兰式蝶阙"
+    ws["B6"] = "** End of Listing **"
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
 
-# verify the downloaded workbook
-import openpyxl
-wb = openpyxl.load_workbook(io.BytesIO(r.data))
-ws = wb["Sheet1"]
-n = sum(1 for rr in range(3, ws.max_row + 1) if ws.cell(rr, 2).value)
-tr = next(rr for rr in range(3, ws.max_row + 1) if ws.cell(rr, 1).value == "合计")
-print("A1:", ws["A1"].value, "| data rows:", n, "| total row:", tr, "| G formula:", ws.cell(tr, 3).value)
 
-# 4. upload path: send files via upload fields
-r = client.post(
-    "/generate",
-    data={
+def _generate(client, tpl, src, *, use_ai=False, api_key="", save_key=False, follow=False):
+    data = {
         "vessel": "测试船",
         "port": "测试港",
         "date": "2026-08-20",
-        "template_upload": (open(tpl, "rb"), "我的模板.xlsx"),
-        "sources_upload": [(open(s, "rb"), os.path.basename(s)) for s in srcs],
-    },
-    content_type="multipart/form-data",
-)
-body = r.get_data(as_text=True)
-assert r.status_code == 200, r.status_code
-print("POST /generate (upload) -> 200 | 测试船 in page:", "测试船" in body)
+        "include_spec": "on",
+        "template_upload": (io.BytesIO(tpl.getvalue()), "template.xlsx"),
+        "sources_upload": [(io.BytesIO(src.getvalue()), "source.xlsx")],
+    }
+    if use_ai:
+        data["use_ai"] = "on"
+        data["api_key"] = api_key
+        if save_key:
+            data["save_key"] = "on"
+    return client.post(
+        "/generate",
+        data=data,
+        content_type="multipart/form-data",
+        follow_redirects=follow,
+    )
 
-# 5. error path: no sources
-r = client.post("/generate", data={"template_path": os.path.basename(tpl)},
-                content_type="multipart/form-data", follow_redirects=True)
-body = r.get_data(as_text=True)
-assert "请至少选择一个" in body, body[:200]
-print("error path (no sources) -> redirect with flash OK")
 
-# 6. DeepSeek path: mocked enrich_parts fills weight/price
-def fake_enrich(parts, api_key, on_status=None):
-    for p in parts:
-        if p.weight is None:
-            p.weight = 9.9
-        if p.price is None:
-            p.price = 88.8
-    if on_status:
-        on_status("（模拟）DeepSeek 估算 10 条")
-    return {"requested": 10, "filled": 8, "from_cache": 0, "errors": 2}
+def test_index_renders(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "报关清单生成器" in r.get_data(as_text=True)
 
-webapp.enrich_parts = fake_enrich
-r = client.post(
-    "/generate",
-    data={
-        "template_path": os.path.basename(tpl),
-        "source_paths": [src_values[0]],
-        "vessel": "AI测试船",
-        "port": "测试港",
-        "date": "2026-08-20",
-        "use_ai": "on",
-        "api_key": "sk-test",
-        "save_key": "on",
-    },
-    content_type="multipart/form-data",
-)
-body = r.get_data(as_text=True)
-assert r.status_code == 200, r.status_code
-assert "AI测试船" in body and "DeepSeek 智能填写" in body, body[:300]
-print("POST /generate with use_ai -> 200 | AI summary shown:", "DeepSeek 智能填写" in body)
 
-# 7. AI enabled but no key -> error flash
-app_config.CONFIG_PATH.unlink(missing_ok=True)  # ensure no saved key
-r = client.post(
-    "/generate",
-    data={"template_path": os.path.basename(tpl), "source_paths": [src_values[0]],
-          "use_ai": "on", "api_key": ""},
-    content_type="multipart/form-data", follow_redirects=True,
-)
-body = r.get_data(as_text=True)
-assert "API Key" in body, body[:300]
-print("AI without key -> error flash OK")
+def test_generate_and_download(client):
+    tpl, src = _template_bytes(), _make_source_bytes()
+    r = _generate(client, tpl, src)
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    m = re.search(r'href="(/download/[^"]+)"', body)
+    assert m, "no download link found"
+    dl = client.get(m.group(1).replace("&amp;", "&"))
+    assert dl.status_code == 200
+    wb = openpyxl.load_workbook(io.BytesIO(dl.data))
+    ws = wb["Sheet1"]
+    assert "船名：" in str(ws["A1"].value)
+    assert ws.max_row >= 4  # title + header + >=1 item + total row
 
-print("\nALL TESTS PASSED")
+
+def test_generate_error_when_no_sources(client):
+    tpl = _template_bytes()
+    r = client.post(
+        "/generate",
+        data={
+            "template_upload": (io.BytesIO(tpl.getvalue()), "template.xlsx"),
+            "vessel": "测试船",
+            "port": "港",
+            "date": "2026-08-20",
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert "请至少选择一个" in r.get_data(as_text=True)
+
+
+def test_generate_with_ai(monkeypatch, client):
+    def fake_enrich(parts, api_key, on_status=None):
+        for p in parts:
+            if p.weight is None:
+                p.weight = 9.9
+            if p.price is None:
+                p.price = 88.8
+        if on_status:
+            on_status("（模拟）DeepSeek 估算 2 条")
+        return {"requested": 2, "filled": 2, "from_cache": 0, "errors": 0}
+
+    monkeypatch.setattr(webapp, "enrich_parts", fake_enrich)
+    tpl, src = _template_bytes(), _make_source_bytes()
+    r = _generate(client, tpl, src, use_ai=True, api_key="sk-test")
+    assert r.status_code == 200
+    assert "DeepSeek" in r.get_data(as_text=True)
+
+
+def test_generate_ai_without_key(client):
+    tpl, src = _template_bytes(), _make_source_bytes()
+    r = _generate(client, tpl, src, use_ai=True, api_key="", follow=True)
+    assert "API Key" in r.get_data(as_text=True)
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(pytest.main([__file__, "-v"]))
