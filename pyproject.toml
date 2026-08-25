@@ -8,3 +8,11 @@ filterwarnings = ["ignore::UserWarning:openpyxl"]
 # pyflakes-only gate: catches unused imports / undefined names (real bugs)
 # without failing the build on pre-existing line-length/style debt.
 select = ["F"]
+
+[tool.mutmut]
+# Mutation testing (CI). Mutates only lines covered by the test suite
+# (mutate_only_covered_lines), so the covered spots include parser._find_packing_header
+# and the AIProvider candidate->response mapping. Runs in a non-blocking CI job.
+source_paths = ["cdf_helper"]
+use_git_change_detection = false
+mutate_only_covered_lines = true

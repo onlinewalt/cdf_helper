@@ -26,3 +26,20 @@ jobs:
           name: coverage-report
           path: coverage.xml
           if-no-files-found: ignore
+
+  # Mutation testing — non-blocking; surfaces surviving mutants for follow-up
+  # without failing PRs. Mutmut mutates only covered lines (see pyproject).
+  # Note: mutmut does not run on native Windows; the ubuntu job is where it executes.
+  mutation:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: mutmut run
+      - run: mutmut results
