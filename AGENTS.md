@@ -65,6 +65,7 @@ Entry points:
 ## CI
 
 - `.github/workflows/tests.yml` runs on every push/PR: `ruff check .` (pyflakes gate) + `pytest --cov=cdf_helper` with a coverage report artifact.
+- Type-check: non-blocking `mypy --strict --ignore-missing-imports cdf_helper` (surfaces annotation gaps and real type errors; does not fail PRs).
 - A separate `mutation` job (non-blocking, `continue-on-error`) runs `mutmut` over the covered lines of `cdf_helper/` — including `parser._find_packing_header` and the `AIProvider` mapping — and reports surviving mutants for follow-up. It never fails PRs.
 - Local mutation testing: `mutmut run` (mutmut does **not** run on native Windows; use WSL or rely on the CI job).
 
