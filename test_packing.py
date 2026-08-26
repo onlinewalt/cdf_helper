@@ -265,10 +265,48 @@ def test_packed_real_file_if_present():
     for p in parts:
         print(f"  name={p.name!r}, qty={p.qty}, type={p.type!r}")
 
+def _write_wrapped_header_workbook(path: Path):
+    """Sheet whose qty header label is wrapped across newlines, mirroring
+    远新湖-加单.xlsx Sheet6 ('订单数\\n量\\n(NUM)')."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet6"
+    ws["A1"] = "备件送船签收单"
+    ws["A2"] = "远新湖 SHIP"
+    ws["A3"] = "序号"
+    ws["B3"] = "订单数\n量\n(NUM)"
+    ws["C3"] = "单位(UNIT)"
+    ws["D3"] = "备件编号(PARTS.NO)"
+    ws["E3"] = "备件名称(PARTS.NAME)"
+    ws["G3"] = "型号与规格(SPECIFICATION)"
+    ws["A4"] = "1"; ws["B4"] = "1"; ws["C4"] = "PC"; ws["E4"] = "Circuit Breaker"
+    ws["A5"] = "2"; ws["B5"] = "2"; ws["C5"] = "PC"; ws["E5"] = "Contactor"
+    wb.save(path)
+
+
+def test_multiline_wrapped_header():
+    """A 数量 column label wrapped across lines (e.g. '订\n订单数\n量\n(NUM)')
+    must still be recognized as the qty header. Regression for 远新湖-加单.xlsx
+    Sheet6 being skipped entirely."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "wrapped.xlsx"
+        _write_wrapped_header_workbook(path)
+
+        warns = []
+        parts = parse_source(path, warn=warns.append)
+
+        assert len(parts) == 2, [(p.name, p.qty) for p in parts]
+        assert parts[0].name == "Circuit Breaker" and parts[0].qty == 1 and parts[0].unit == "PC"
+        assert parts[1].name == "Contactor" and parts[1].qty == 2 and parts[1].unit == "PC"
+        assert not any("跳过" in w for w in warns), warns
+    print("multiline wrapped header test OK")
+
+
 if __name__ == "__main__":
     test_synthetic()
     test_end_of_listing_embedded_in_data()
     test_packed_synthetic()
+    test_multiline_wrapped_header()
     test_vessel_lookup()
     test_packed_real_file_if_present()
     test_real_file_if_present()

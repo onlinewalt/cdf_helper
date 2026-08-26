@@ -123,7 +123,10 @@ def _trim_footer(text: str) -> str:
 
 
 def _norm(s: str) -> str:
-    return str(s).strip().replace(" ", "").replace("\u3000", "").lower()
+    # Collapse ALL whitespace (incl. newlines from wrapped labels like
+    # "订\n订单数\n量\n(NUM)") so keyword contains-matches are not broken by
+    # a '\n' sitting between two characters of the same word.
+    return re.sub(r"\s+", "", str(s)).lower()
 
 
 def _clean(value) -> str:
