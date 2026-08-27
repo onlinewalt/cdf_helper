@@ -18,10 +18,10 @@ from cdf_helper import config as app_config
 from cdf_helper.generator import generate, sanitize_filename, validate_template
 from cdf_helper.parser import (
     parse_sources,
-    detect_vessel,
     detect_vessel_pair,
     load_vessel_names,
     bilingual_vessel,
+    _clear_sheets_cache,
 )
 
 
@@ -198,12 +198,14 @@ def main(argv=None):
         print(f"  提示: {msg}")
     print(f"共解析到 {len(parts)} 条备件。")
 
-    vessel = args.vessel or detect_vessel(sources)
+    vessel = args.vessel or ""
     chinese, english = (None, None)
     if not vessel:
         chinese, english = detect_vessel_pair(sources)
-        if chinese is None and english is None:
-            vessel = detect_vessel(sources) or ""
+        if chinese:
+            vessel = chinese
+        elif english:
+            vessel = english
     if not vessel:
         vessel = _ask("请输入船名", None)
     if vessel or chinese or english:
@@ -249,6 +251,7 @@ def main(argv=None):
         print(f"错误：{e}")
         return 1
     print(f"完成：{out}  （共 {len(parts)} 条备件）")
+    _clear_sheets_cache()
     return 0
 
 

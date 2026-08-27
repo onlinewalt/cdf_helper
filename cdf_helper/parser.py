@@ -122,11 +122,22 @@ def _trim_footer(text: str) -> str:
     return text
 
 
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
 def _norm(s: str) -> str:
     # Collapse ALL whitespace (incl. newlines from wrapped labels like
     # "订\n订单数\n量\n(NUM)") so keyword contains-matches are not broken by
     # a '\n' sitting between two characters of the same word.
-    return re.sub(r"\s+", "", str(s)).lower()
+    return _WHITESPACE_RE.sub("", str(s)).lower()
+
+
+# Pre-computed normalized-alias → field lookup (O(1) instead of O(aliases) per cell)
+_ALIAS_TO_FIELD = {
+    _norm(alias): field
+    for field, aliases in HEADER_ALIASES.items()
+    for alias in aliases
+}
 
 
 def _clean(value) -> str:
@@ -243,6 +254,17 @@ class _Sheet:
 
 _LENIENT_OPENPYXL = False
 
+_sheets_cache: dict = {}
+
+
+def _clear_sheets_cache() -> None:
+    """Clear the module-level workbook sheet cache.
+
+    Call after a request/CLI run finishes to free memory held by parsed sheets
+    (especially for large .xls files loaded via xlrd).
+    """
+    _sheets_cache.clear()
+
 
 def _make_openpyxl_lenient() -> None:
     """Patch openpyxl's number caster so a non-numeric value stored in a
@@ -278,17 +300,24 @@ def _make_openpyxl_lenient() -> None:
 
 def _open_sheets(path: Path):
     path = Path(path)
+    key = str(path.resolve())
+    cached = _sheets_cache.get(key)
+    if cached is not None:
+        return cached
     if path.suffix.lower() == ".xls":
         if xlrd is None:
             raise RuntimeError("需要 xlrd 库来读取 .xls 文件：pip install xlrd")
         wb = xlrd.open_workbook(str(path))
-        return [_Sheet(s) for s in wb.sheets()]
-    # Tolerate vendor .xlsx files that store a non-numeric value (e.g. a
-    # stray ".") in a number-typed cell: openpyxl 3.x would otherwise raise
-    # "could not convert string to float" and abort the whole load.
-    _make_openpyxl_lenient()
-    wb = load_workbook(path, data_only=True)
-    return [_Sheet(ws) for ws in wb.worksheets]
+        sheets = [_Sheet(s) for s in wb.sheets()]
+    else:
+        # Tolerate vendor .xlsx files that store a non-numeric value (e.g. a
+        # stray ".") in a number-typed cell: openpyxl 3.x would otherwise raise
+        # "could not convert string to float" and abort the whole load.
+        _make_openpyxl_lenient()
+        wb = load_workbook(path, data_only=True)
+        sheets = [_Sheet(ws) for ws in wb.worksheets]
+    _sheets_cache[key] = sheets
+    return sheets
 
 
 # ---- standard (Chinese header) parsing --------------------------------
@@ -303,25 +332,17 @@ def _find_header_row(sheet):
             text = _norm(cell.value)
             if not text:
                 continue
-            matched = False
-            for field, aliases in HEADER_ALIASES.items():
-                for alias in aliases:
-                    if _norm(alias) == text:
-                        if field not in mapping:
-                            mapping[field] = cell.column
-                        matched = True
-                        break
-                if matched:
-                    break
-            if matched:
-                continue  # exact alias wins; do not also contains-match this cell
+            field = _ALIAS_TO_FIELD.get(text)
+            if field is not None:
+                # exact alias wins; don't also contains-match this cell
+                if field not in mapping:
+                    mapping[field] = cell.column
+                continue
             for needle, field in _CONTAINS_RULES:
                 if field in mapping:
                     continue
                 if needle in text:
                     mapping[field] = cell.column
-                    # Do NOT break — allow multiple field matches in one cell
-                    # (needed for packed header format where all headers are in one cell)
         if "name" in mapping and "qty" in mapping:
             return cells[0].row, mapping
     return None, None
@@ -753,6 +774,65 @@ def _row_parts(cells, exclude_cols=()):
     return qty, unit, name_parts, type_parts
 
 
+def _row_text(cells) -> str:
+    """Join all non-None cell values in a row into a single cleaned string."""
+    return " ".join(_clean(c.value) for c in cells if c.value is not None)
+
+
+def _find_end_of_listing(rows, start_idx, last_row) -> int:
+    """Find the '**End of Listing**' footer row (1-based).
+
+    A row carrying both an End-of-Listing marker AND a quantity is treated as
+    data (the marker is embedded in a cell), not the footer.
+    Returns ``last_row + 1`` if no genuine footer is found.
+    """
+    for idx in range(start_idx, last_row + 1):
+        text = _row_text(rows[idx - 1])
+        if _END_RE.search(text):
+            if _QTY_RE.search(text):
+                continue
+            return idx
+    return last_row + 1
+
+
+def _collect_packing_items(rows, start, end, exclude_cols, path, sheet_name, warn) -> list:
+    """Walk rows[start:end], grouping each qty-bearing row with its continuation
+    lines (Type/spec) until the next qty row or end."""
+    items = []
+    i = start
+    while i < end:
+        cells = rows[i - 1]
+        qty, unit, name_parts, type_parts = _row_parts(cells, exclude_cols)
+        if qty is None:
+            i += 1
+            continue
+
+        j = i + 1
+        while j < end:
+            nqty, _, nname, ntype = _row_parts(rows[j - 1], exclude_cols)
+            if nqty is not None:
+                break
+            if _END_RE.search(_row_text(rows[j - 1])):
+                break
+            name_parts.extend(nname)
+            type_parts.extend(ntype)
+            j += 1
+
+        name = " ".join(dict.fromkeys(p for p in name_parts if p)).strip(" -–—")
+        type_str = "; ".join(dict.fromkeys(t for t in type_parts if t)).strip(" -–—")
+        name = _trim_footer(name)
+        type_str = _trim_footer(type_str)
+        if not name and type_str and len(type_str) <= 60:
+            name, type_str = type_str, ""
+        if not name:
+            if warn:
+                warn(f"{path.name}/{sheet_name} 第 {i} 行备件缺少名称（数量 {qty:g} {unit or '个'}）")
+            name = "(未填写名称)"
+        items.append(Part(name=name, qty=qty, unit=unit or "个", type=type_str or None))
+        i = j
+    return items
+
+
 def _parse_packing_headerless(sheet, path, warn) -> list:
     """Fallback for a Yuantong receipt whose 'Item/Quantity/Particulars' label
     row is missing entirely (e.g. 德胜海.xlsx Sheet4): an '**End of Listing**'
@@ -763,64 +843,24 @@ def _parse_packing_headerless(sheet, path, warn) -> list:
     reliable signal of a packing list, so Chinese 签收单 / delivery-note forms
     (which lack it) are deliberately left to the normal 'skipped' path."""
     rows = list(sheet.iter_rows())
-    end = sheet.last_row + 1
-    for idx in range(1, sheet.last_row + 1):
-        text = " ".join(_clean(c.value) for c in rows[idx - 1] if c.value is not None)
-        if _END_RE.search(text):
-            # 'End of Listing' is sometimes embedded inside a data cell; only a
-            # qty-free row is the real footer.
-            if _QTY_RE.search(text):
-                continue
-            end = idx
-            break
-    if end > sheet.last_row:
+    last = sheet.last_row
+    end = _find_end_of_listing(rows, 1, last)
+    if end > last:
         return []
 
     start = None
     for idx in range(1, end):
-        text = " ".join(_clean(c.value) for c in rows[idx - 1] if c.value is not None)
-        if _QTY_RE.search(text):
+        if _QTY_RE.search(_row_text(rows[idx - 1])):
             start = idx
             break
     if start is None:
         return []
 
     # Group each qty row with its following continuation (Type/spec) lines,
-    # reusing the same logic as _parse_packing_sheet but with no exclude_cols
-    # (no header => no separate Part-No column; pure-numeric codes are already
-    # dropped by _is_irrelevant) and bounded by start/end instead of a header.
-    items = []
-    i = start
-    while i < end:
-        cells = rows[i - 1]
-        qty, unit, name_parts, type_parts = _row_parts(cells, set())
-        if qty is None:
-            i += 1
-            continue
-        j = i + 1
-        while j < end:
-            nqty, _, nname, ntype = _row_parts(rows[j - 1], set())
-            if nqty is not None:
-                break
-            text = " ".join(_clean(c.value) for c in rows[j - 1] if c.value is not None)
-            if _END_RE.search(text):
-                break
-            name_parts.extend(nname)
-            type_parts.extend(ntype)
-            j += 1
-        name = " ".join(dict.fromkeys(p for p in name_parts if p)).strip(" -–—")
-        type_str = "; ".join(dict.fromkeys(t for t in type_parts if t)).strip(" -–—")
-        name = _trim_footer(name)
-        type_str = _trim_footer(type_str)
-        if not name and type_str and len(type_str) <= 60:
-            name, type_str = type_str, ""
-        if not name:
-            if warn:
-                warn(f"{path.name}/{sheet.name} 第 {i} 行备件缺少名称（数量 {qty:g} {unit or '个'}）")
-            name = "(未填写名称)"
-        items.append(Part(name=name, qty=qty, unit=unit or "个", type=type_str or None))
-        i = j
-    return items
+    # reusing _collect_packing_items with no exclude_cols (no header => no
+    # separate Part-No column; pure-numeric codes are already dropped by
+    # _is_irrelevant) and bounded by start/end instead of a header.
+    return _collect_packing_items(rows, start, end, set(), path, sheet.name, warn)
 
 
 def _parse_packing_sheet(sheet, path, warn) -> list:
@@ -831,55 +871,8 @@ def _parse_packing_sheet(sheet, path, warn) -> list:
         return []
 
     rows = list(sheet.iter_rows())
-    end = sheet.last_row + 1
-    for idx in range(header_row, sheet.last_row + 1):
-        text = " ".join(_clean(c.value) for c in rows[idx - 1] if c.value is not None)
-        if _END_RE.search(text):
-            # "End of Listing" is sometimes embedded inside a data row's cell
-            # (e.g. a Serial No. cell carrying the marker between sections)
-            # rather than sitting on its own footer row. A genuine footer row
-            # carries no item quantity; only truncate on those.
-            if _QTY_RE.search(text):
-                continue
-            end = idx
-            break
-
-    items = []
-    i = header_row
-    while i < end:
-        cells = rows[i - 1]
-        qty, unit, name_parts, type_parts = _row_parts(cells, exclude_cols)
-        if qty is None:
-            i += 1
-            continue
-
-        # look ahead: continuation / Type lines until the next qty row or end
-        j = i + 1
-        while j < end:
-            nqty, _, nname, ntype = _row_parts(rows[j - 1], exclude_cols)
-            if nqty is not None:
-                break
-            text = " ".join(_clean(c.value) for c in rows[j - 1] if c.value is not None)
-            if _END_RE.search(text):
-                break
-            name_parts.extend(nname)
-            type_parts.extend(ntype)
-            j += 1
-
-        name = " ".join(dict.fromkeys(p for p in name_parts if p)).strip(" -–—")
-        type_str = "; ".join(dict.fromkeys(t for t in type_parts if t)).strip(" -–—")
-        name = _trim_footer(name)
-        type_str = _trim_footer(type_str)
-        if not name and type_str and len(type_str) <= 60:
-            name, type_str = type_str, ""
-        if not name:
-            if warn:
-                warn(f"{path.name}/{sheet.name} 第 {i} 行备件缺少名称（数量 {qty:g} {unit or '个'}）")
-            name = "(未填写名称)"
-
-        items.append(Part(name=name, qty=qty, unit=unit or "个", type=type_str or None))
-        i = j
-    return items
+    end = _find_end_of_listing(rows, header_row, sheet.last_row)
+    return _collect_packing_items(rows, header_row, end, exclude_cols, path, sheet.name, warn)
 
 
 # ---- number / text helpers --------------------------------------------
@@ -951,53 +944,14 @@ def parse_sources(paths, warn=None) -> list:
 
 
 def detect_vessel(paths) -> Optional[str]:
-    """Try to guess the vessel name from the source files (船名 / 船名/单位 / Vessel Name)."""
-    for p in paths:
-        p = Path(p)
-        try:
-            sheets = _open_sheets(p)
-        except Exception:
-            continue
-        for sheet in sheets:
-            for row in sheet.iter_rows():
-                texts = [str(c.value).strip() for c in row if c.value is not None]
-                joined = " ".join(texts)
+    """Try to guess the vessel name from the source files (船名 / 船名/单位 / Vessel Name).
 
-                m = re.search(r"船名\s*[:：]\s*(\S+)", joined)
-                if m:
-                    return m.group(1)
-
-                for i, t in enumerate(texts):
-                    if "船名/单位" in t or "船名／单位" in t:
-                        for other in texts[i + 1:]:
-                            if other:
-                                return other
-                        break
-
-                for t in texts:
-                    if "vessel name" not in t.lower():
-                        continue
-                    m = re.search(r"[Vv]essel\s+[Nn]ame\s*[:：]?\s*(.*)", t)
-                    val = (m.group(1) if m else "").strip()
-                    if not val:
-                        # label cell only; the value sits in a sibling cell on this row
-                        for other in texts:
-                            if other != t and other.lstrip(":"):
-                                candidate = other.lstrip(":")
-                                pm = re.search(r"\(([^)]*)\)", candidate)
-                                if pm and re.search(r"[\u4e00-\u9fff]", pm.group(1)):
-                                    return pm.group(1).strip()
-                                clean = candidate.split("(")[0].strip()
-                                if clean:
-                                    return clean
-                        continue
-                    pm = re.search(r"\(([^)]*)\)", val)
-                    if pm and re.search(r"[\u4e00-\u9fff]", pm.group(1)):
-                        return pm.group(1).strip()
-                    clean = val.split("(")[0].strip()
-                    if clean:
-                        return clean
-    return None
+    Delegates to :func:`detect_vessel_pair` and returns the Chinese name if
+    found, falling back to the English name — the same traversal logic is no
+    longer duplicated here.
+    """
+    chinese, english = detect_vessel_pair(paths)
+    return chinese or english  # type: ignore[no-any-return]
 
 
 # ---- bilingual vessel name (中英文船名对照表) ----------------------------
@@ -1153,20 +1107,14 @@ def load_vessel_names(path):
                     pair_cols.append((c.column, c2.column))
                     break
         for r in rows[1:]:
+            row_map = {c.column: _clean(c.value) for c in r}
             for cn_col, en_col in pair_cols:
-                cn = _cell_in_row(r, cn_col)
-                en = _cell_in_row(r, en_col)
+                cn = row_map.get(cn_col)
+                en = row_map.get(en_col)
                 if cn and en:
                     zh2en.setdefault(_zh_key(cn), _clean(en))
                     en2zh.setdefault(_en_key(en), _zh_key(cn))
     return zh2en, en2zh
-
-
-def _cell_in_row(row, col):
-    for c in row:
-        if c.column == col:
-            return _clean(c.value)
-    return None
 
 
 def bilingual_vessel(vessel, zh2en, en2zh, english=None, chinese=None):
