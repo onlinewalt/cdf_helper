@@ -241,6 +241,41 @@ class _Sheet:
         return self._source.cell(row, column)
 
 
+_LENIENT_OPENPYXL = False
+
+
+def _make_openpyxl_lenient() -> None:
+    """Patch openpyxl's number caster so a non-numeric value stored in a
+    number-typed cell (e.g. a stray '.') degrades to a string instead of
+    raising ``ValueError: could not convert string to float`` during load,
+    which aborts the whole workbook.
+
+    Idempotent: valid numeric cells still cast to float(), so only cells that
+    previously raised (e.g. a stray ".") are affected. Applied before every
+    .xlsx load and cached, so it is a no-op after the first call.
+    """
+    global _LENIENT_OPENPYXL
+    if _LENIENT_OPENPYXL:
+        return
+    try:
+        import openpyxl.worksheet._reader as _reader
+    except Exception:
+        _LENIENT_OPENPYXL = True
+        return
+    if not hasattr(_reader, "_cast_number"):
+        _LENIENT_OPENPYXL = True
+        return
+
+    def _cast_number(value: str) -> object:
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return value
+
+    _reader._cast_number = _cast_number
+    _LENIENT_OPENPYXL = True
+
+
 def _open_sheets(path: Path):
     path = Path(path)
     if path.suffix.lower() == ".xls":
@@ -248,6 +283,10 @@ def _open_sheets(path: Path):
             raise RuntimeError("需要 xlrd 库来读取 .xls 文件：pip install xlrd")
         wb = xlrd.open_workbook(str(path))
         return [_Sheet(s) for s in wb.sheets()]
+    # Tolerate vendor .xlsx files that store a non-numeric value (e.g. a
+    # stray ".") in a number-typed cell: openpyxl 3.x would otherwise raise
+    # "could not convert string to float" and abort the whole load.
+    _make_openpyxl_lenient()
     wb = load_workbook(path, data_only=True)
     return [_Sheet(ws) for ws in wb.worksheets]
 

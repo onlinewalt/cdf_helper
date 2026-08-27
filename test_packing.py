@@ -2,6 +2,7 @@
 best-effort check against the real uploaded file when present."""
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -302,11 +303,57 @@ def test_multiline_wrapped_header():
     print("multiline wrapped header test OK")
 
 
+def _write_xlsx_with_bad_number_cell(path: Path):
+    """A valid parts workbook, then inject a number-typed cell holding a stray
+    '.' -- the exact defect that makes openpyxl 3.1 raise
+    'ValueError: could not convert string to float' and abort the whole load."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["序号", "备件名称", "数量", "单位"])
+    ws.append([1, "Circuit Breaker", 1, "PC"])
+    ws.append([2, "Contactor", 2, "PC"])
+    tmp = path.with_name(path.name + ".tmp")
+    wb.save(tmp)
+    with zipfile.ZipFile(tmp) as zin, zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item)
+            if item.filename.endswith("worksheets/sheet1.xml"):
+                xml = data.decode("utf-8")
+                xml = xml.replace(
+                    "</sheetData>",
+                    '<row r="9"><c r="A9"><v>.</v></c></row></sheetData>',
+                    1,
+                )
+                data = xml.encode("utf-8")
+            zout.writestr(item, data)
+    tmp.unlink()
+
+
+def test_bad_number_cell_xlsx_loads():
+    """openpyxl 3.1 raises 'could not convert string to float: .' on a stray
+    '.' in a number cell, aborting the workbook. _open_sheets must still load
+    it (lenient) and parse the parts. Regression for 新茂洋-六横岛26-8-27.xlsx."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "badnum.xlsx"
+        _write_xlsx_with_bad_number_cell(path)
+
+        warns = []
+        parts = parse_source(path, warn=warns.append)
+
+        assert len(parts) == 2, [(p.name, p.qty) for p in parts]
+        names = [p.name for p in parts]
+        assert "Circuit Breaker" in names and "Contactor" in names, names
+        assert not any("跳过" in w for w in warns), warns
+    print("bad number cell xlsx test OK")
+
+
 if __name__ == "__main__":
     test_synthetic()
     test_end_of_listing_embedded_in_data()
     test_packed_synthetic()
     test_multiline_wrapped_header()
+    test_bad_number_cell_xlsx_loads()
     test_vessel_lookup()
     test_packed_real_file_if_present()
     test_real_file_if_present()
