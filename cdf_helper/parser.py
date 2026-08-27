@@ -696,11 +696,18 @@ def _find_packing_header(sheet):
             or "quant" in joined          # covers "Quantity(Uni)", OCR "Quanty"
             or "num" in joined            # covers a count column labelled "Num"
         )
-        item_found = (
+        # A packing header carries a Quantity-like label with an Item-like
+        # label. Yuantong receipts like 德胜海.xlsx label columns
+        # 'Quantity(Unit) Particulars Part No' with NO Item column, so a
+        # Particulars/Part No/Description label is accepted in place of Item.
+        label_found = (
             "item" in joined
             or any(_close_enough(t, _PACKING_TOKENS_ITEM) for t in tokens)
+            or "particulars" in joined
+            or "part no" in joined
+            or "description" in joined
         )
-        if not item_found or not qty_found:
+        if not label_found or not qty_found:
             continue
         exclude = set()
         for c in cells:
@@ -744,6 +751,76 @@ def _row_parts(cells, exclude_cols=()):
             continue
         name_parts.append(_clean_name(base))
     return qty, unit, name_parts, type_parts
+
+
+def _parse_packing_headerless(sheet, path, warn) -> list:
+    """Fallback for a Yuantong receipt whose 'Item/Quantity/Particulars' label
+    row is missing entirely (e.g. 德胜海.xlsx Sheet4): an '**End of Listing**'
+    footer and qty-bearing data rows are still present, so infer the table from
+    the first qty row up to the End-of-Listing marker.
+
+    Only fires when an End-of-Listing footer exists -- that footer is the
+    reliable signal of a packing list, so Chinese 签收单 / delivery-note forms
+    (which lack it) are deliberately left to the normal 'skipped' path."""
+    rows = list(sheet.iter_rows())
+    end = sheet.last_row + 1
+    for idx in range(1, sheet.last_row + 1):
+        text = " ".join(_clean(c.value) for c in rows[idx - 1] if c.value is not None)
+        if _END_RE.search(text):
+            # 'End of Listing' is sometimes embedded inside a data cell; only a
+            # qty-free row is the real footer.
+            if _QTY_RE.search(text):
+                continue
+            end = idx
+            break
+    if end > sheet.last_row:
+        return []
+
+    start = None
+    for idx in range(1, end):
+        text = " ".join(_clean(c.value) for c in rows[idx - 1] if c.value is not None)
+        if _QTY_RE.search(text):
+            start = idx
+            break
+    if start is None:
+        return []
+
+    # Group each qty row with its following continuation (Type/spec) lines,
+    # reusing the same logic as _parse_packing_sheet but with no exclude_cols
+    # (no header => no separate Part-No column; pure-numeric codes are already
+    # dropped by _is_irrelevant) and bounded by start/end instead of a header.
+    items = []
+    i = start
+    while i < end:
+        cells = rows[i - 1]
+        qty, unit, name_parts, type_parts = _row_parts(cells, set())
+        if qty is None:
+            i += 1
+            continue
+        j = i + 1
+        while j < end:
+            nqty, _, nname, ntype = _row_parts(rows[j - 1], set())
+            if nqty is not None:
+                break
+            text = " ".join(_clean(c.value) for c in rows[j - 1] if c.value is not None)
+            if _END_RE.search(text):
+                break
+            name_parts.extend(nname)
+            type_parts.extend(ntype)
+            j += 1
+        name = " ".join(dict.fromkeys(p for p in name_parts if p)).strip(" -–—")
+        type_str = "; ".join(dict.fromkeys(t for t in type_parts if t)).strip(" -–—")
+        name = _trim_footer(name)
+        type_str = _trim_footer(type_str)
+        if not name and type_str and len(type_str) <= 60:
+            name, type_str = type_str, ""
+        if not name:
+            if warn:
+                warn(f"{path.name}/{sheet.name} 第 {i} 行备件缺少名称（数量 {qty:g} {unit or '个'}）")
+            name = "(未填写名称)"
+        items.append(Part(name=name, qty=qty, unit=unit or "个", type=type_str or None))
+        i = j
+    return items
 
 
 def _parse_packing_sheet(sheet, path, warn) -> list:
@@ -852,7 +929,13 @@ def parse_source(path, warn=None) -> list:
                 continue
             parts.extend(_parse_standard(sheet, mapping, header_row, path, warn))
             continue
-        parts.extend(_parse_packing_sheet(sheet, path, warn))
+        sheet_parts = _parse_packing_sheet(sheet, path, warn)
+        parts.extend(sheet_parts)
+        if not sheet_parts:
+            # Header-less Yuantong packing list (e.g. 德胜海.xlsx Sheet4): the
+            # Item/Quantity/Particulars label row is missing, but an End-of-
+            # Listing footer and qty-bearing rows remain -> recover them.
+            parts.extend(_parse_packing_headerless(sheet, path, warn))
 
     if not parts:
         raise ValueError(f"在 {path.name} 中没有解析到备件数据")

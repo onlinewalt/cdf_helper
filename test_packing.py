@@ -348,9 +348,61 @@ def test_bad_number_cell_xlsx_loads():
     print("bad number cell xlsx test OK")
 
 
+def _write_deshanghai_workbook(path: Path):
+    """德胜海-style Yuantong receipt: two sheets with NO 'Item' column.
+
+    Sheet1 carries the 'Quantity(Unit) Particulars Part No' label row (no Item);
+    Sheet2 has that label row missing entirely (header-less). Both carry an
+    '**End of Listing**' footer."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "Quantity(Unit)      Particulars      Part No"
+    ws["A2"] = "2 PCE"
+    ws["B2"] = "压侧传感器(Pressure"
+    ws["C2"] = "Tranmitter)"
+    ws["D2"] = "02.01.02.017"
+    ws["A3"] = "Type:8298.28.2517"
+    ws["B3"] = "Rang:0-10bar"
+    ws["A5"] = "** End of Listing **"
+    ws = wb.create_sheet("Sheet2")
+    ws["A1"] = "DE SHENG HAI RT26026345  Page 1 of 1"
+    ws["A3"] = "Part No"
+    ws["A5"] = "2 PCE"
+    ws["B5"] = "光强传感器"
+    ws["C5"] = "02.01.01.017"
+    ws["A7"] = "** End of Listing **"
+    wb.save(path)
+
+
+def test_deshanghai_no_item_header_and_headerless():
+    """Regression for 德胜海.xlsx: sheets with no 'Item' column, one with a
+    'Quantity(Unit) Particulars Part No' header and one header-less, both
+    bounded by '**End of Listing**'."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "deshanghai.xlsx"
+        _write_deshanghai_workbook(path)
+        warns = []
+        parts = parse_source(path, warn=warns.append)
+        assert len(parts) == 2, [(p.name, p.qty) for p in parts]
+
+        header_part, headerless_part = parts
+        # Sheet1 (header present, no Item): qty parsed, Part No code dropped
+        assert header_part.qty == 2 and header_part.unit == "PCE"
+        assert "压侧传感器" in header_part.name
+        assert header_part.type == "8298.28.2517"
+        assert "02.01.02.017" not in header_part.name
+        # Sheet2 (header-less): recovered from first qty row up to End of Listing
+        assert headerless_part.qty == 2 and headerless_part.unit == "PCE"
+        assert "光强传感器" in headerless_part.name
+        assert "02.01.01.017" not in headerless_part.name
+    print("deshanghai no-item + headerless test OK")
+
+
 if __name__ == "__main__":
     test_synthetic()
     test_end_of_listing_embedded_in_data()
+    test_deshanghai_no_item_header_and_headerless()
     test_packed_synthetic()
     test_multiline_wrapped_header()
     test_bad_number_cell_xlsx_loads()
