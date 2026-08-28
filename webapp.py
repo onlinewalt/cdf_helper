@@ -29,7 +29,7 @@ GENERATED_DIR = BASE_DIR / "generated"
 UPLOAD_DIR.mkdir(exist_ok=True)
 GENERATED_DIR.mkdir(exist_ok=True)
 
-RETENTION_DAYS = 7
+RETENTION_DAYS = 1
 
 
 def _cleanup_old_files(directory, max_age_days=RETENTION_DAYS):
