@@ -79,6 +79,54 @@ Entry points:
 6. **`SECRET_KEY` is hardcoded** (`webapp.py` line 54) — fine for local dev only.
 7. **Chinese locale assumed** — encoding errors may appear if system locale doesn't support UTF-8; `main.py:_ensure_utf8_stdio()` mitigates this.
 
+## Diagnosing unprocessable sheets
+
+When a source workbook (or a single sheet) yields 0 parts, run this checklist before opening the file. Every step is tied to a real `parser.py` symbol so you can `grep`/`read` quickly instead of guessing.
+
+### Step 1 — capture the parser's own diagnostics
+`parse_source(path, warn=...)` calls back per sheet / per row with the reason it skipped or could not parse. Two messages to watch for:
+
+- `f"{path.name}/{sheet.name}: 未找到 Item/Quantity 表头，跳过该表"` → "no Item/Quantity header → skip sheet" (the sheet was identified as an English packing list but had no recognisable header row).
+- `f"{path.name} ...缺...1 列: {name}"` → a header row *was* found but an individual data row was missing a column and was dropped (recoverable).
+
+If **all** sheets across the file resolve to 0 parts, `parse_source` raises `ValueError("在 {path.name} 中没有解析到备件数据")`. Always pass a `warn` callable — silent 0-result runs hide the cause.
+
+Quick scan script (repo root):
+```python
+from pathlib import Path
+from cdf_helper.parser import parse_source
+warns = []
+parts = parse_source(Path("SOME_FILE.xlsx"), warn=warns.append)
+print("parts:", len(parts))
+for w in warns: print(" -", w)
+```
+
+### Step 2 — root-cause checklist (symbol that owns it)
+
+- **Workbook fails to open / every sheet missing.** `_open_sheets` (.xlsx branch) first calls `_make_openpyxl_lenient()`, which monkeypatches `openpyxl.worksheet._reader._cast_number` so a non-numeric value in a number-typed cell (e.g. a stray `.`) returns a string instead of raising `ValueError: could not convert string to float` (which would otherwise abort the whole load). `.xls` goes through `xlrd`. If the crash persists, the patch wasn't applied (`_LENIENT_OPENPYXL` guard) or openpyxl changed its internals.
+- **File misrouted as the vessel table, not data.** A file whose text contains `船名` is consumed by `detect_vessel` / `_split_zh_en` (regex `r"船名\s*[:：]\s*(\S+)"`; also `船名/单位` / `船名／单位`) as the bilingual vessel-name lookup, **not** as parts data — this is a caller-level convention in `main.py`/`webapp.py` source selection. If a genuine data file literally contains "船名" it may be skipped; call `detect_vessel(paths)` first to confirm intent.
+- **Chinese header sheet not recognised.** `_find_header_row` (Chinese path) keys off `HEADER_ALIASES` via the precomputed `_ALIAS_TO_FIELD` table, normalising each cell with `_norm` (collapses *all* whitespace incl. newlines via `_WHITESPACE_RE`). A wrapped label like `订\n订单数\n量\n(NUM)` is matched only because `_norm` strips the `\n`; if `_norm` is bypassed, `订...订单数...` never contains `数量`/`金额` and the header row is missed → the sheet falls through to the English packing path → usually 0 parts.
+- **Packed single-column format not taken.** `_is_packed_format(mapping)` is True only when every mapped field points to the *same* column (`len(set(cols)) == 1`). Headers spread across ≥2 cells/rows → False → routes to `_parse_standard`/`_parse_multiline_row` (which may then yield 0 parts).
+- **English packing list: no header found → sheet skipped.** `_find_packing_header` (docstring: rows 696-709) requires a row carrying **both** an Item-like label **and** a Quantity-like label; a footer/data row never carries both, so this is safe. No such row → no header → `_parse_packing_sheet` walks rows for the End-of-Listing sentinel; if none, 0 parts.
+- **OCR-corrupted labels.** `_find_packing_header` is OCR-tolerant: exact substrings first, then `_close_enough(t, keywords)` (Levenshtein ≤ `max_dist=2` via `_dist`). `Quantity`→`Quanty`/`Q'ty`/`qtt`, `Item`→`ftem`/`tem`/`particulars`/`description`, a `Num` column = quantity. `Qantily` is dist 2 to `quantity` → passes. Tokens farther than 2 (e.g. `Quantitty`) do **not** — extend the keyword tuple or raise `max_dist`.
+- **End-of-Listing boundary over/under-shoots.** `_END_RE = re.compile(r"end\s*of\s*listing", re.IGNORECASE)` tolerates OCR merges (`End ofListing`, `endoflisting`). `_find_end_of_listing(rows, start_idx, last_row)` bounds `_collect_packing_items`; a different sentinel (`End of Table`, `***`) bleeds rows — extend `_END_RE` or `_is_signature`.
+- **Header found but rows malformed.** `_parse_multiline_row` / `_parse_standard` emit per-row `warn("...缺...1 列")` when a row lacks the expected column count; the row is skipped, not fatal. A high ratio ⇒ the column mapping (from `_find_header_row`) is wrong — inspect `mapping`.
+
+### Step 3 — regression / invariant checks
+Each `test_*.py` test below locks down one historical failure; if a real file regresses, reproduce it hermetically with an `openpyxl.Workbook()` helper (pattern: `_write_*_workbook` + `assert len(parse_source(...)) == N`):
+
+- `test_bad_number_cell_xlsx_loads` — corrupt numeric cell no longer aborts the `.xlsx` load (`_make_openpyxl_lenient`).
+- `test_multiline_wrapped_header` — wrapped `订 订单数 量 (NUM)` collapses under `_norm`.
+- `test_deshanghai_no_item_header_and_headerless` — Item-less header + headerless End-of-Listing recovery (`_parse_packing_headerless`).
+- `test_yuantong_ocr_header_and_merged_footer` — OCR `Qantily` header + merged `End ofListing` footer.
+- `test_packed_synthetic` (and `test_packed_real_file_if_present`) — packed single-column extraction (`_parse_packed_sheet` / `_is_packed_format`).
+- `test_end_of_listing_embedded_in_data` / `test_synthetic` — `_END_RE` boundary + End-of-Listing inside a data row.
+
+Green baseline: `python3 -m pytest -q` → `19 passed`; `ruff check .` → `All checks passed!`.
+
+### Step 4 — when the whole file raises
+`parse_source` raises `ValueError("在 {path.name} 中没有解析到备件数据")` when **every** sheet yields 0 parts. In that case loop `_open_sheets(path)` and call `_find_header_row`, `_find_packing_header`, `_find_end_of_listing` per sheet manually — exactly one of the Step-2 branches above will reveal the offending sheet.
+
 ## File references
 
 - Template example (do not delete, used by tests): `veseel name-destination port-报关清单-date.xlsx`
