@@ -75,7 +75,9 @@ _QTY_RE = re.compile(
     r"(PCE|PCS|PC|SETS|SET|SHEET|PKT|MTR|PAIR|CASE|CAN|EA|BAG|ROLL|BIL)(?!\w)",
     re.IGNORECASE,
 )
-_END_RE = re.compile(r"end\s+of\s+listing", re.IGNORECASE)
+# Tolerant of OCR whitespace collapse, e.g. "End ofListing" (no space between
+# "of" and "Listing") or the fully merged "endoflisting".
+_END_RE = re.compile(r"end\s*of\s*listing", re.IGNORECASE)
 
 # Detects a line starting with a sequence number or checkbox+number (multi-part format)
 _SEQ_PREFIX_RE = re.compile(r"^[✓✗☐☑\u2713\u2717\u2714\u2716\u2718\u2610\u2611\u2612工\s]*\d+(?:\.\d+)?\s")
@@ -716,6 +718,9 @@ def _find_packing_header(sheet):
             or "qtt" in joined
             or "quant" in joined          # covers "Quantity(Uni)", OCR "Quanty"
             or "num" in joined            # covers a count column labelled "Num"
+            # OCR can corrupt "Quantity" into near-misses like "Qantily"; the
+            # edit distance to "quantity" is 2, so accept close alphabetic tokens.
+            or any(_close_enough(t, ("quantity", "qty")) for t in tokens)
         )
         # A packing header carries a Quantity-like label with an Item-like
         # label. Yuantong receipts like 德胜海.xlsx label columns

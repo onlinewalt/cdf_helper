@@ -399,10 +399,64 @@ def test_deshanghai_no_item_header_and_headerless():
     print("deshanghai no-item + headerless test OK")
 
 
+def _write_yuantong_ocr_workbook(path: Path):
+    """远棠湾-加单.xlsx Sheet6 layout: Yuantong receipt whose qty header is OCR-corrupted
+    to 'Qantily' (dist 2 from 'Quantity') and whose footer is merged as
+    'End ofListing' (no space). Columns: A=seq, B=Qty(Unit), D=Item, G=Part No."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet6"
+    ws["A1"] = "技术服务中心"
+    ws["A14"] = 28.0
+    ws["B14"] = "Qantily"
+    ws["D14"] = "Item"
+    ws["G14"] = "Part No"
+    rows = [
+        (29.0, "1 PC",  "Pin",                          57517501.0),
+        (30.0, "30 PC", "Hexagon Head Serew",           57617301.0),
+        (31.0, "30 PC", "Lock Washer",                  57627901.0),
+        (32.0, "5 PC",  "Guide Ring",                   59777703.0),
+        (33.0, "2 PC",  "Gaskel\n3-FAY VALVE SPARE PARIS DN25", 59801801.0),
+        (34.0, "2 PC",  "INCLIDING 59801801-08\nBody Gasket",
+                                                       "906691701 had substituted\n  901639601"),
+    ]
+    for r, (seq, qty, name, pno) in enumerate(rows, start=15):
+        ws.cell(row=r, column=1, value=seq)
+        ws.cell(row=r, column=2, value=qty)
+        ws.cell(row=r, column=4, value=name)
+        ws.cell(row=r, column=7, value=pno)
+    ws["E21"] = '"End ofListing*'
+    ws["F22"] = "Signature and Chop"
+    wb.save(path)
+
+
+def test_yuantong_ocr_header_and_merged_footer():
+    """Regression for 远棠湾-加单.xlsx: OCR 'Qantily' header + merged
+    'End ofListing' footer must still be recognised and parsed."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "yuantong_ocr.xlsx"
+        _write_yuantong_ocr_workbook(path)
+        warns = []
+        parts = parse_source(path, warn=warns.append)
+
+        assert len(parts) == 6, [(p.name, p.qty) for p in parts]
+        by = {p.name: p for p in parts}
+        assert "Pin" in by and by["Pin"].qty == 1 and by["Pin"].unit == "PC"
+        assert by["Hexagon Head Serew"].qty == 30 and by["Hexagon Head Serew"].unit == "PC"
+        assert by["Lock Washer"].qty == 30
+        assert by["Guide Ring"].qty == 5
+        assert any("3-FAY VALVE" in n and p.qty == 2 for n, p in by.items())
+        # Part-No column (G) is excluded -> codes must not leak into names
+        assert all("57517501" not in p.name and "57617301" not in p.name for p in parts), parts
+        assert not any("跳过" in w for w in warns), warns
+    print("yuantong OCR header + merged footer test OK")
+
+
 if __name__ == "__main__":
     test_synthetic()
     test_end_of_listing_embedded_in_data()
     test_deshanghai_no_item_header_and_headerless()
+    test_yuantong_ocr_header_and_merged_footer()
     test_packed_synthetic()
     test_multiline_wrapped_header()
     test_bad_number_cell_xlsx_loads()
