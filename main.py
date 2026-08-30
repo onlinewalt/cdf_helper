@@ -21,7 +21,6 @@ from cdf_helper.parser import (
     detect_vessel_pair,
     load_vessel_names,
     bilingual_vessel,
-    _clear_sheets_cache,
 )
 
 
@@ -251,7 +250,6 @@ def main(argv=None):
         print(f"错误：{e}")
         return 1
     print(f"完成：{out}  （共 {len(parts)} 条备件）")
-    _clear_sheets_cache()
     return 0
 
 

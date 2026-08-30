@@ -17,9 +17,11 @@ Both .xlsx (openpyxl) and legacy .xls (xlrd) files are supported.
 
 import re
 import unicodedata
+from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Protocol, runtime_checkable
 
 from openpyxl import load_workbook
 
@@ -204,8 +206,8 @@ def _strip_seq(text: str) -> str:
     return text.strip()
 
 
-class _Cell:
-    """Minimal unified cell wrapper over xlrd / openpyxl cells."""
+class Cell:
+    """A single cell: its raw ``value`` plus 1-based ``column`` and ``row`` indices."""
 
     __slots__ = ("value", "column", "row")
 
@@ -215,79 +217,112 @@ class _Cell:
         self.row = row
 
 
-class _Sheet:
-    """Minimal unified sheet wrapper supporting iter_rows() and cell()."""
+@runtime_checkable
+class SpreadsheetSheet(Protocol):
+    """Backend-agnostic view of one worksheet.
 
-    def __init__(self, source):
-        self._source = source
-        if source.__class__.__module__.startswith("xlrd"):
-            self._kind = "xls"
-        else:
-            self._kind = "xlsx"
+    The interface is deliberately minimal and 1-based (matching both openpyxl
+    and xlrd) so that callers never branch on the I/O backend &mdash; the leak
+    that the old ``_Sheet.kind == 'xls'`` dispatch suffered from.
+    """
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def last_row(self) -> int: ...
+
+    def iter_rows(self) -> list: ...
+
+    def cell(self, row: int, column: int) -> Cell: ...
+
+
+class _OpenpyxlSpreadsheetSheet:
+    """Adapter over an openpyxl worksheet.
+
+    Constructing one triggers the process-wide lenient-cast patch (see
+    :func:`cache_openpyxl_lenient`) so a stray non-numeric value in a
+    number-typed cell degrades to a string instead of aborting the load.
+    """
+
+    def __init__(self, ws):
+        cache_openpyxl_lenient()
+        self._ws = ws
 
     @property
     def name(self) -> str:
-        if self._kind == "xls":
-            return str(self._source.name)
-        return str(self._source.title)
+        return str(self._ws.title)
 
     @property
     def last_row(self) -> int:
-        if self._kind == "xls":
-            return int(self._source.nrows)
-        return int(self._source.max_row)
+        return int(self._ws.max_row)
 
-    def iter_rows(self):
-        if self._kind == "xls":
-            for r in range(self._source.nrows):
-                yield [
-                    _Cell(self._source.cell_value(r, c), c + 1, r + 1)
-                    for c in range(self._source.ncols)
-                ]
-        else:
-            for row in self._source.iter_rows():
-                yield [_Cell(c.value, c.column, c.row) for c in row]
+    def iter_rows(self) -> list:
+        return [
+            [Cell(c.value, c.column, c.row) for c in row]
+            for row in self._ws.iter_rows()
+        ]
 
-    def cell(self, row, column):
-        if self._kind == "xls":
-            return _Cell(self._source.cell_value(row - 1, column - 1), column, row)
-        return self._source.cell(row, column)
+    def cell(self, row: int, column: int) -> Cell:
+        c = self._ws.cell(row, column)
+        return Cell(c.value, c.column, c.row)
 
 
-_LENIENT_OPENPYXL = False
+class _XlrdSpreadsheetSheet:
+    """Adapter over an xlrd sheet."""
 
-_sheets_cache: dict = {}
+    def __init__(self, sh):
+        self._sh = sh
+
+    @property
+    def name(self) -> str:
+        return str(self._sh.name)
+
+    @property
+    def last_row(self) -> int:
+        return int(self._sh.nrows)
+
+    def iter_rows(self) -> list:
+        return [
+            [Cell(self._sh.cell_value(r, c), c + 1, r + 1) for c in range(self._sh.ncols)]
+            for r in range(self._sh.nrows)
+        ]
+
+    def cell(self, row: int, column: int) -> Cell:
+        return Cell(self._sh.cell_value(row - 1, column - 1), column, row)
 
 
-def _clear_sheets_cache() -> None:
-    """Clear the module-level workbook sheet cache.
+class Workbook:
+    """A parsed workbook: its sheets, parsed once and cached.
 
-    Call after a request/CLI run finishes to free memory held by parsed sheets
-    (especially for large .xls files loaded via xlrd).
+    Holding the sheet list (not the raw openpyxl/xlrd book) mirrors the old
+    behaviour but lets callers iterate sheets repeatedly without reopening.
     """
-    _sheets_cache.clear()
+
+    __slots__ = ("sheets",)
+
+    def __init__(self, sheets: list):
+        self.sheets = sheets
 
 
-def _make_openpyxl_lenient() -> None:
+# Process-level guard: the lenient-cast patch is applied once per interpreter
+# session, not per call. (See ``cache_openpyxl_lenient``.)
+_OPENPYX_LENIENT_PATCHED = False
+
+
+def cache_openpyxl_lenient() -> None:
     """Patch openpyxl's number caster so a non-numeric value stored in a
     number-typed cell (e.g. a stray '.') degrades to a string instead of
     raising ``ValueError: could not convert string to float`` during load,
     which aborts the whole workbook.
 
     Idempotent: valid numeric cells still cast to float(), so only cells that
-    previously raised (e.g. a stray ".") are affected. Applied before every
-    .xlsx load and cached, so it is a no-op after the first call.
+    previously raised (e.g. a stray ".") are affected. Folded into the openpyxl
+    adapter's construction so there is no separate pre-load call site or
+    module-global toggle to manage.
     """
-    global _LENIENT_OPENPYXL
-    if _LENIENT_OPENPYXL:
-        return
-    try:
-        import openpyxl.worksheet._reader as _reader
-    except Exception:
-        _LENIENT_OPENPYXL = True
-        return
-    if not hasattr(_reader, "_cast_number"):
-        _LENIENT_OPENPYXL = True
+    global _OPENPYX_LENIENT_PATCHED
+    if _OPENPYX_LENIENT_PATCHED:
         return
 
     def _cast_number(value: str) -> object:
@@ -296,30 +331,82 @@ def _make_openpyxl_lenient() -> None:
         except (ValueError, TypeError):
             return value
 
-    _reader._cast_number = _cast_number
-    _LENIENT_OPENPYXL = True
+    try:
+        import openpyxl.worksheet._reader as _reader
+        if hasattr(_reader, "_cast_number"):
+            _reader._cast_number = _cast_number
+    except Exception:
+        pass
+    _OPENPYX_LENIENT_PATCHED = True
 
 
-def _open_sheets(path: Path):
-    path = Path(path)
-    key = str(path.resolve())
-    cached = _sheets_cache.get(key)
-    if cached is not None:
-        return cached
-    if path.suffix.lower() == ".xls":
-        if xlrd is None:
-            raise RuntimeError("需要 xlrd 库来读取 .xls 文件：pip install xlrd")
-        wb = xlrd.open_workbook(str(path))
-        sheets = [_Sheet(s) for s in wb.sheets()]
-    else:
-        # Tolerate vendor .xlsx files that store a non-numeric value (e.g. a
-        # stray ".") in a number-typed cell: openpyxl 3.x would otherwise raise
-        # "could not convert string to float" and abort the whole load.
-        _make_openpyxl_lenient()
-        wb = load_workbook(path, data_only=True)
-        sheets = [_Sheet(ws) for ws in wb.worksheets]
-    _sheets_cache[key] = sheets
-    return sheets
+class WorkbookCache:
+    """Bounded LRU cache of parsed workbooks, keyed by resolved path.
+
+    Injectable and context-managed so callers never touch module-global state.
+    ``max_entries=8`` matches the typical per-request footprint (vessel-name
+    lookup + a handful of source files); a long-running Flask server never
+    hoards stale workbooks, and tests can inject an empty cache for hermetic
+    behaviour.
+    """
+
+    def __init__(self, max_entries: int = 8):
+        self.max_entries = max_entries
+        self._order: "OrderedDict[str, Workbook]" = OrderedDict()
+
+    def open(self, path) -> Workbook:
+        path = Path(path)
+        key = str(path.resolve())
+        if key in self._order:
+            self._order.move_to_end(key)
+            return self._order[key]
+        wb = self._load(path)
+        self._order[key] = wb
+        self._order.move_to_end(key)
+        while len(self._order) > self.max_entries:
+            self._order.popitem(last=False)
+        return wb
+
+    def _load(self, path: Path) -> Workbook:
+        if path.suffix.lower() == ".xls":
+            if xlrd is None:
+                raise RuntimeError("需要 xlrd 库来读取 .xls 文件：pip install xlrd")
+            book = xlrd.open_workbook(str(path))
+            sheets = [_XlrdSpreadsheetSheet(s) for s in book.sheets()]
+        else:
+            # The lenient-cast patch is applied in the adapter ctor; call it
+            # once here too so the very first sheet construction is safe.
+            cache_openpyxl_lenient()
+            book = load_workbook(path, data_only=True)
+            sheets = [_OpenpyxlSpreadsheetSheet(ws) for ws in book.worksheets]
+        return Workbook(sheets=sheets)
+
+    def clear(self) -> None:
+        self._order.clear()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.clear()
+        return False
+
+
+@contextmanager
+def _cache_scope(cache):
+    """Use ``cache`` if given, else create+clear a fresh one for the call.
+
+    Lets public functions default to hermetic behavior (``cache=None``) while
+    still allowing a caller to thread a shared cache across several calls.
+    """
+    owns = cache is None
+    if owns:
+        cache = WorkbookCache()
+    try:
+        yield cache
+    finally:
+        if owns:
+            cache.clear()
 
 
 # ---- standard (Chinese header) parsing --------------------------------
@@ -912,50 +999,113 @@ def _to_text(value) -> Optional[str]:
 
 # ---- public API -------------------------------------------------------
 
-def parse_source(path, warn=None) -> list:
-    """Parse a source Excel file (all sheets) into a list of Part objects.
+class SheetLayout(Protocol):
+    """A worksheet layout: how to recognise a sheet and parse it into parts.
 
-    Optional callable warn(msg) receives messages about skipped/unparseable rows.
+    The protocol is the seam that keeps :func:`parse_source` from carrying a
+    4-way inline dispatch. Each layout owns one schema: it pairs its header
+    recogniser with the row interpreter that consumes that schema's columns.
     """
-    path = Path(path)
-    parts = []
-    for sheet in _open_sheets(path):
+
+    def recognizes(self, sheet: SpreadsheetSheet) -> bool: ...
+
+    def parse_sheet(self, sheet: SpreadsheetSheet, path, warn) -> list: ...
+
+
+class ChineseHeaderLayout:
+    """Chinese receipt / material list: a header row carrying 名称 + 数量.
+
+    Claims both packed single-column sheets and standard multi-column sheets.
+    """
+
+    def recognizes(self, sheet: SpreadsheetSheet) -> bool:
+        # Fast early-exit: a genuine Chinese header sits on row 2-ish, so the
+        # common case returns without a full-sheet scan.
+        return _find_header_row(sheet)[0] is not None
+
+    def parse_sheet(self, sheet: SpreadsheetSheet, path, warn) -> list:
         header_row, mapping = _find_header_row(sheet)
-        if header_row is not None:
-            if _is_packed_format(mapping):
-                parts.extend(_parse_packed_sheet(sheet, mapping, header_row, path, warn))
-                continue
-            parts.extend(_parse_standard(sheet, mapping, header_row, path, warn))
-            continue
-        sheet_parts = _parse_packing_sheet(sheet, path, warn)
-        parts.extend(sheet_parts)
-        if not sheet_parts:
+        if _is_packed_format(mapping):
+            return _parse_packed_sheet(sheet, mapping, header_row, path, warn)
+        return _parse_standard(sheet, mapping, header_row, path, warn)
+
+
+class EnglishPackingLayout:
+    """English Receipt/Packing List (e.g. 德胜海/远棠湾): Item/Quantity(Unit)/Particulars.
+
+    This is the *fallback* layout: it claims every sheet the Chinese layout did
+    not, in LAYOUTS priority order. That preserves the historical ``else`` branch
+    &mdash; it lets non-packing junk sheets (e.g. test_synthetic ``NoHeader``)
+    reach ``parse_sheet`` so they warn-and-skip (``_parse_packing_sheet`` emits
+    "未找到 Item/Quantity 表头，跳过该表"), and lets header-less Yuantong receipts
+    fall through to ``_parse_packing_headerless``.
+    """
+
+    def recognizes(self, sheet: SpreadsheetSheet) -> bool:
+        # Catch-all: LAYOUTS orders Chinese first, so we only ever see sheets
+        # that aren't a Chinese-header sheet. Returning True without a second
+        # ``_find_header_row`` scan is both cheaper and behaviour-identical.
+        return True
+
+    def parse_sheet(self, sheet: SpreadsheetSheet, path, warn) -> list:
+        parts = _parse_packing_sheet(sheet, path, warn)
+        if not parts:
             # Header-less Yuantong packing list (e.g. 德胜海.xlsx Sheet4): the
             # Item/Quantity/Particulars label row is missing, but an End-of-
             # Listing footer and qty-bearing rows remain -> recover them.
-            parts.extend(_parse_packing_headerless(sheet, path, warn))
+            parts = _parse_packing_headerless(sheet, path, warn)
+        return parts
+
+
+#: Ordered, partition-style list of layouts. The first whose ``recognizes``
+#: returns True claims a sheet. Chinese first; English is the catch-all fallback.
+LAYOUTS: list = [ChineseHeaderLayout(), EnglishPackingLayout()]
+
+
+def parse_source(path, warn=None, cache=None) -> list:
+    """Parse a source Excel file (all sheets) into a list of Part objects.
+
+    Optional callable warn(msg) receives messages about skipped/unparseable rows.
+    Optional ``cache``: a :class:`WorkbookCache`. When ``None`` (the default) a
+    fresh cache is created and cleared for the call &mdash; hermetic by default.
+    Pass a shared cache from a request to dedupe workbook opens across
+    :func:`detect_vessel_pair` / :func:`load_vessel_names` / :func:`parse_sources`.
+    """
+    path = Path(path)
+    parts = []
+    with _cache_scope(cache) as co:
+        for sheet in co.open(path).sheets:
+            for layout in LAYOUTS:
+                if layout.recognizes(sheet):
+                    parts.extend(layout.parse_sheet(sheet, path, warn))
+                    break
+
+    if not parts:
+        raise ValueError(f"在 {path.name} 中没有解析到备件数据")
+    return parts
 
     if not parts:
         raise ValueError(f"在 {path.name} 中没有解析到备件数据")
     return parts
 
 
-def parse_sources(paths, warn=None) -> list:
+def parse_sources(paths, warn=None, cache=None) -> list:
     """Parse one or more source files, merging all parts in order."""
     all_parts = []
-    for p in paths:
-        all_parts.extend(parse_source(p, warn=warn))
+    with _cache_scope(cache) as co:
+        for p in paths:
+            all_parts.extend(parse_source(p, warn=warn, cache=co))
     return all_parts
 
 
-def detect_vessel(paths) -> Optional[str]:
+def detect_vessel(paths, cache=None) -> Optional[str]:
     """Try to guess the vessel name from the source files (船名 / 船名/单位 / Vessel Name).
 
     Delegates to :func:`detect_vessel_pair` and returns the Chinese name if
-    found, falling back to the English name — the same traversal logic is no
+    found, falling back to the English name &mdash; the same traversal logic is no
     longer duplicated here.
     """
-    chinese, english = detect_vessel_pair(paths)
+    chinese, english = detect_vessel_pair(paths, cache=cache)
     return chinese or english  # type: ignore[no-any-return]
 
 
@@ -1043,82 +1193,84 @@ def _split_zh_en(val: str):
     return zh, en or None
 
 
-def detect_vessel_pair(paths):
+def detect_vessel_pair(paths, cache=None):
     """Return (chinese, english) vessel names found in the sources, or (None, None)."""
-    for p in paths:
-        p = Path(p)
-        try:
-            sheets = _open_sheets(p)
-        except Exception:
-            continue
-        for sheet in sheets:
-            for row in sheet.iter_rows():
-                texts = [str(c.value).strip() for c in row if c.value is not None]
-                joined = " ".join(texts)
+    with _cache_scope(cache) as co:
+        for p in paths:
+            p = Path(p)
+            try:
+                sheets = co.open(p).sheets
+            except Exception:
+                continue
+            for sheet in sheets:
+                for row in sheet.iter_rows():
+                    texts = [str(c.value).strip() for c in row if c.value is not None]
+                    joined = " ".join(texts)
 
-                m = re.search(r"船名\s*[:：]\s*(\S+)", joined)
-                if m:
-                    zh, en = _split_zh_en(m.group(1))
-                    if zh or en:
-                        return zh, en
+                    m = re.search(r"船名\s*[:：]\s*(\S+)", joined)
+                    if m:
+                        zh, en = _split_zh_en(m.group(1))
+                        if zh or en:
+                            return zh, en
 
-                for i, t in enumerate(texts):
-                    if "船名/单位" in t or "船名／单位" in t:
-                        for other in texts[i + 1:]:
-                            if other:
-                                return _split_zh_en(other)
-                        break
+                    for i, t in enumerate(texts):
+                        if "船名/单位" in t or "船名／单位" in t:
+                            for other in texts[i + 1:]:
+                                if other:
+                                    return _split_zh_en(other)
+                            break
 
-                for i, t in enumerate(texts):
-                    if "vessel name" not in t.lower():
-                        continue
-                    m = re.search(r"[Vv]essel\s+[Nn]ame\s*[:：]?\s*(.*)", t)
-                    val = (m.group(1) if m else "").strip()
-                    if not val:
-                        for other in texts[i + 1:]:
-                            if not other.lstrip(":"):
-                                continue
-                            res = _split_zh_en(other.lstrip(":"))
-                            if res[0] or res[1]:
-                                return res
-                        continue
-                    res = _split_zh_en(val)
-                    if res[0] or res[1]:
-                        return res
+                    for i, t in enumerate(texts):
+                        if "vessel name" not in t.lower():
+                            continue
+                        m = re.search(r"[Vv]essel\s+[Nn]ame\s*[:：]?\s*(.*)", t)
+                        val = (m.group(1) if m else "").strip()
+                        if not val:
+                            for other in texts[i + 1:]:
+                                if not other.lstrip(":"):
+                                    continue
+                                res = _split_zh_en(other.lstrip(":"))
+                                if res[0] or res[1]:
+                                    return res
+                            continue
+                        res = _split_zh_en(val)
+                        if res[0] or res[1]:
+                            return res
     return None, None
 
 
-def load_vessel_names(path):
+def load_vessel_names(path, cache=None):
     """Load the 中英文船名 lookup workbook -> (zh2en, en2zh) name mappings."""
     path = Path(path)
     zh2en, en2zh = {}, {}
-    for sheet in _open_sheets(path):
-        rows = list(sheet.iter_rows())
-        if not rows:
-            continue
-        header = rows[0]
-        pair_cols = []
-        for c in header:
-            h = _clean(c.value)
-            if not h or ("中文" not in h and h != "船名"):
+    with _cache_scope(cache) as co:
+        for sheet in co.open(path).sheets:
+            rows = list(sheet.iter_rows())
+            if not rows:
                 continue
-            for c2 in header:
-                if c2.column <= c.column:
+            header = rows[0]
+            pair_cols = []
+            for c in header:
+                h = _clean(c.value)
+                if not h or ("中文" not in h and h != "船名"):
                     continue
-                h2 = _clean(c2.value)
-                if not h2:
-                    continue
-                if "英文" in h2 or "拼音" in h2:
-                    pair_cols.append((c.column, c2.column))
-                    break
-        for r in rows[1:]:
-            row_map = {c.column: _clean(c.value) for c in r}
-            for cn_col, en_col in pair_cols:
-                cn = row_map.get(cn_col)
-                en = row_map.get(en_col)
-                if cn and en:
-                    zh2en.setdefault(_zh_key(cn), _clean(en))
-                    en2zh.setdefault(_en_key(en), _zh_key(cn))
+                for c2 in header:
+                    if c2.column <= c.column:
+                        continue
+                    h2 = _clean(c2.value)
+                    if not h2:
+                        continue
+                    if "英文" in h2 or "拼音" in h2:
+                        pair_cols.append((c.column, c2.column))
+                        break
+            for r in rows[1:]:
+                row_map = {c.column: _clean(c.value) for c in r}
+                for cn_col, en_col in pair_cols:
+                    cn = row_map.get(cn_col)
+                    en = row_map.get(en_col)
+                    if cn and en:
+                        zh2en.setdefault(_zh_key(cn), _clean(en))
+                        en2zh.setdefault(_en_key(en), _zh_key(cn))
     return zh2en, en2zh
 
 

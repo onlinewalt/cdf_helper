@@ -15,11 +15,11 @@ from cdf_helper import config as app_config
 from cdf_helper.ai import enrich_parts
 from cdf_helper.generator import generate, sanitize_filename, validate_template
 from cdf_helper.parser import (
+    WorkbookCache,
     parse_sources,
     detect_vessel_pair,
     load_vessel_names,
     bilingual_vessel,
-    _clear_sheets_cache,
 )
 
 REPORT_LABEL = "报关清单"
@@ -73,13 +73,13 @@ def _server_vessel_lookup(files):
     return None
 
 
-def _server_vessel_names():
+def _server_vessel_names(cache=None):
     """Load (zh2en, en2zh) from the lookup workbook, falling back to empty dicts."""
     lookup = _server_vessel_lookup(_spreadsheets_in(BASE_DIR))
     if lookup is None:
         return {}, {}
     try:
-        return load_vessel_names(lookup)
+        return load_vessel_names(lookup, cache=cache)
     except Exception:
         return {}, {}
 
@@ -158,29 +158,29 @@ def do_generate():
         flash("请至少选择一个或上传一个备件来源文件。", "error")
         return redirect(url_for("index"))
 
-    # --- parse ----------------------------------------------------------
+    # --- parse & detect -------------------------------------------------
     warnings = []
 
     def warn(msg):
         warnings.append(msg)
 
+    vessel = request.form.get("vessel", "").strip()
     try:
-        parts = parse_sources(sources, warn=warn)
+        with WorkbookCache() as cache:
+            parts = parse_sources(sources, warn=warn, cache=cache)
+            chinese, english = (None, None)
+            if not vessel:
+                chinese, english = detect_vessel_pair(sources, cache=cache)
+                if chinese:
+                    vessel = chinese
+                elif english:
+                    vessel = english
+            if vessel or chinese or english:
+                zh2en, en2zh = _server_vessel_names(cache)
+                vessel = bilingual_vessel(vessel, zh2en, en2zh, english=english, chinese=chinese)
     except ValueError as e:
         flash(str(e), "error")
         return redirect(url_for("index"))
-
-    vessel = request.form.get("vessel", "").strip()
-    chinese, english = (None, None)
-    if not vessel:
-        chinese, english = detect_vessel_pair(sources)
-        if chinese:
-            vessel = chinese
-        elif english:
-            vessel = english
-    if vessel or chinese or english:
-        zh2en, en2zh = _server_vessel_names()
-        vessel = bilingual_vessel(vessel, zh2en, en2zh, english=english, chinese=chinese)
     port = request.form.get("port", "").strip()
     date = request.form.get("date", "").strip() or datetime.date.today().isoformat()
     include_spec = request.form.get("include_spec") == "on"
@@ -219,8 +219,6 @@ def do_generate():
     except Exception as e:
         flash(f"生成失败：{e}", "error")
         return redirect(url_for("index"))
-    finally:
-        _clear_sheets_cache()
 
     return render_template(
         "result.html",
