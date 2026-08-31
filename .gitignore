@@ -23,3 +23,7 @@ new file.xlsx
 .coverage
 coverage.xml
 *26-8-27.xlsx
+
+# opencode agent tooling (environment-local, not part of the repo):
+.agents/
+skills-lock.json
