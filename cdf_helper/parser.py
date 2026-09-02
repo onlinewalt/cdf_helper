@@ -44,7 +44,7 @@ class Part:
 HEADER_ALIASES = {
     "name": ("备件名称", "名称", "备件", "品名", "物料名称", "物资名称", "名称及规格", "名称/规格", "part name", "name", "description", "description of goods", "des", "particulars", "particular"),
     "type": ("型号", "规格", "型号规格", "规格型号", "物资规格", "物资规格/品牌", "规格/品牌", "type", "spec", "model", "品牌", "part no", "part no.", "parts no", "parts no."),
-    "qty": ("数量", "件数", "qty", "quantity", "数量/套", "数量  ", "q'ty", "qtt"),
+    "qty": ("数量", "件数", "发货量", "qty", "quantity", "数量/套", "数量  ", "q'ty", "qtt"),
     "unit": ("单位", "unit", "计量单位", "单位  "),
     "weight": ("重量", "重量(kg)", "weight", "单重", "毛重"),
     "price": ("单价", "单价/rmb", "unit price", "price", "价格"),
@@ -62,6 +62,7 @@ _CONTAINS_RULES = (
     ("品牌", "type"),
     ("part no", "type"),
     ("数量", "qty"),
+    ("发货量", "qty"),
     ("件数", "qty"),
     ("q'ty", "qty"),
     ("qty", "qty"),

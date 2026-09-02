@@ -452,11 +452,62 @@ def test_yuantong_ocr_header_and_merged_footer():
     print("yuantong OCR header + merged footer test OK")
 
 
+def _write_yuanshou_workbook(path: Path):
+    """远秋湖-加单.xlsx format: a Chinese ship-material delivery receipt whose
+    qty column is labelled `发货量` (not `数量`), with `船舶物资名称` (name) and
+    `单价` (price) headers. Footer rows like `本页合计`/`收货人签字` must be excluded."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    headers = ["行号", "船舶物资名称", "船舶物资规格/品牌", "单位", "发货量", "单价", "备注"]
+    for c, h in enumerate(headers, start=1):
+        ws.cell(row=1, column=c, value=h)
+    data = [
+        ("#1", "打印机硒鼓", "BROTHER MFC-7860DN", "个", 4, 1058.33, ""),
+        ("#2", "HDIM高清线", "通用", "根", 2, 46, ""),
+        ("#3", "打印机硒鼓", "HP LaserJet M128fn", "只", 20, 735, ""),
+    ]
+    for r, row in enumerate(data, start=2):
+        for c, val in enumerate(row, start=1):
+            ws.cell(row=r, column=c, value=val)
+    # footer rows (no part name -> must be excluded)
+    ws.cell(row=5, column=1, value="本页合计")
+    ws.cell(row=5, column=6, value=22232.14)
+    ws.cell(row=6, column=1, value="收货人签字")
+    ws.cell(row=6, column=7, value="盖章")
+    wb.save(path)
+
+
+def test_yuanshou_delivery_receipt_format():
+    """Regression: `发货量` qty column + `船舶物资名称`/`单价` headers on a
+    ship-material delivery receipt (远秋湖-加单.xlsx). Before the fix, `发货量`
+    wasn't recognized as the qty column -> no header -> parse_source raised
+    ValueError('...没有解析到备件数据')."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "yuanshou.xlsx"
+        _write_yuanshou_workbook(path)
+        warns = []
+        parts = parse_source(path, warn=warns.append)
+
+        assert len(parts) == 3, [(p.name, p.qty, p.price) for p in parts]
+        names = [(p.name, p.qty, p.unit, p.price) for p in parts]
+        assert ("打印机硒鼓", 4.0, "个", 1058.33) in names, names
+        assert ("HDIM高清线", 2.0, "根", 46.0) in names, names
+        assert ("打印机硒鼓", 20.0, "只", 735.0) in names, names
+        # footers excluded (no name -> never emitted as a part)
+        assert all("合计" not in (p.name or "") and p.name != "收货人签字" for p in parts), parts
+        # no header-skip / row-damage warnings: the sheet WAS recognised as a
+        # Chinese parts header and every data row parsed cleanly.
+        assert not any("未找到" in w or "跳过" in w or "缺少" in w for w in warns), warns
+    print("yuanshou delivery-receipt format test OK")
+
+
 if __name__ == "__main__":
     test_synthetic()
     test_end_of_listing_embedded_in_data()
     test_deshanghai_no_item_header_and_headerless()
     test_yuantong_ocr_header_and_merged_footer()
+    test_yuanshou_delivery_receipt_format()
     test_packed_synthetic()
     test_multiline_wrapped_header()
     test_bad_number_cell_xlsx_loads()
