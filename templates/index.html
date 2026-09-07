@@ -82,16 +82,22 @@
             </section>
 
             <section>
-                <h2>4. DeepSeek 智能填写（可选）</h2>
-                <p class="muted">为来源文件中缺少“重量 / 单价”的备件调用 DeepSeek 估算并填入清单。</p>
+                <h2>4. AI 智能填写（可选）</h2>
+                <p class="muted">为来源文件中缺少“重量 / 单价”的备件调用 AI 估算并填入清单。</p>
                 <label class="check-line">
                     <input type="checkbox" id="use_ai" name="use_ai">
-                    使用 DeepSeek 估算缺失的重量 / 单价
+                    使用 AI 估算缺失的重量 / 单价
                 </label>
                 <div class="field" id="ai_key_field" style="display:none;">
-                    <label for="api_key">DeepSeek API Key：</label>
+                    <label for="api_key">AI API Key：</label>
                     <input type="password" id="api_key" name="api_key" value="{{ api_key_prefill }}"
-                           placeholder="sk-...（留空则读取环境变量 DEEPSEEK_API_KEY）">
+                           placeholder="sk-...（留空则读取环境变量 AI_API_KEY）">
+                    <label for="api_url_base">API 基础地址（可选，默认 DeepSeek）：</label>
+                    <input type="text" id="api_url_base" name="api_url_base" value="{{ api_url_prefill }}"
+                           placeholder="https://api.openai.com/v1">
+                    <label for="model">模型（可选，默认 deepseek-chat）：</label>
+                    <input type="text" id="model" name="model" value="{{ model_prefill }}"
+                           placeholder="deepseek-chat / gpt-4o-mini">
                 </div>
                 <label class="check-line" id="save_key_line" style="display:none;">
                     <input type="checkbox" name="save_key" checked>

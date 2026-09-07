@@ -1,4 +1,4 @@
-"""Tests for the DeepSeek enrichment module (with a mocked HTTP backend)."""
+"""Tests for the AI enrichment module (with a mocked HTTP backend)."""
 import sys
 import tempfile
 from pathlib import Path
@@ -60,6 +60,44 @@ def test_api_failure_keeps_blanks():
         stats = provider.enrich(parts)
         assert parts[0].weight is None and parts[0].price is None
         assert stats["errors"] == 1
+
+
+def test_custom_url_and_model_used():
+    with tempfile.TemporaryDirectory() as tmp:
+        seen = {}
+        provider = AIProvider(api_key="sk-test", cache_path=Path(tmp) / "cache.json",
+                              api_url="https://api.openai.com/v1", model="gpt-4o-mini")
+        provider._post_json = lambda body: seen.update({"body": body}) or (
+            '{"items":[{"id":1,"weight_kg":1.5,"unit_price":9}]}'
+        )
+        parts = [Part(name="A", qty=1)]
+        provider.enrich(parts)
+        assert seen["body"]["model"] == "gpt-4o-mini", seen
+        assert parts[0].weight == 1.5 and parts[0].price == 9.0
+
+
+def test_enrich_parts_defaults_from_config(monkeypatch):
+    import cdf_helper.ai as ai_mod
+    from cdf_helper import config
+
+    monkeypatch.setattr(config, "get_ai_config", lambda: {
+        "api_key": "sk-env", "api_url": "https://api.example.com/v2", "model": "custom-model",
+    })
+    captured = {}
+
+    class _FakeProvider:
+        def __init__(self, **kw):
+            captured.update(kw)
+
+        def enrich(self, parts, on_status=None):
+            return {}
+
+    monkeypatch.setattr(ai_mod, "AIProvider", _FakeProvider)
+    from cdf_helper.ai import enrich_parts
+
+    enrich_parts(parts=[Part(name="A", qty=1)], api_key="sk-env")
+    assert captured["api_url"] == "https://api.example.com/v2", captured
+    assert captured["model"] == "custom-model", captured
 
 
 def test_json_fenced_response():

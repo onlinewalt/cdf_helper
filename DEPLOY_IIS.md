@@ -71,8 +71,8 @@ C:\inetpub\wwwroot\cdf_helper\logs\
 添加 `apphost.config` 中的应用程序池身份（通常是 `IIS APPPOOL\<应用程序池名称>`）到这些文件夹的写入权限。
 
 ### 5. 环境变量（可选）
-如需配置 DeepSeek API Key 或翻译 API Key：
-- 设置系统环境变量 `DEEPSEEK_API_KEY` 和 `TRANSLATE_APP_ID` / `TRANSLATE_APIKEY`
+如需配置 AI API Key 或翻译 API Key：
+- 设置系统环境变量 `AI_API_KEY` 和 `TRANSLATE_APP_ID` / `TRANSLATE_APIKEY`
 - 或在 `config.json` 中配置（首次在 Web 界面保存即可）
 
 ### 6. 访问

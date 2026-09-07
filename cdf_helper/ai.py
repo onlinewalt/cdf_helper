@@ -1,8 +1,9 @@
-"""DeepSeek 智能估算：为缺失 重量/单价 的备件调用 DeepSeek 补充数据。
+"""AI 智能估算：为缺失 重量/单价 的备件调用 AI 补充数据。
 
 - 仅填补来源文件中缺失的 重量(KG) / 单价(RMB)，不覆盖已有值。
 - 分批（BATCH_SIZE 条/次）请求，降低调用次数与成本。
 - 结果缓存在 ai_cache.json（按 名称+规格 哈希），重复生成不重复计费。
+- 支持任意 OpenAI 兼容 API（默认 DeepSeek，可配置 base URL 与模型）。
 """
 
 import hashlib
@@ -13,8 +14,8 @@ import urllib.request
 
 from pathlib import Path
 
-API_URL = "https://api.deepseek.com/chat/completions"
-MODEL = "deepseek-chat"
+from cdf_helper.config import DEFAULT_API_URL, DEFAULT_MODEL
+
 BATCH_SIZE = 50
 CACHE_PATH = Path(__file__).resolve().parent.parent / "ai_cache.json"
 TIMEOUT = 120
@@ -31,10 +32,18 @@ def _cache_key(name: str, spec: str) -> str:
 
 
 class AIProvider:
-    def __init__(self, api_key: str, cache_path: Path = CACHE_PATH):
+    def __init__(
+        self,
+        api_key: str,
+        cache_path: Path = CACHE_PATH,
+        api_url: str = DEFAULT_API_URL,
+        model: str = DEFAULT_MODEL,
+    ):
         if not api_key:
-            raise ValueError("缺少 DeepSeek API Key")
+            raise ValueError("缺少 AI API Key")
         self.api_key = api_key
+        self.api_url = (api_url or DEFAULT_API_URL).rstrip("/")
+        self.model = model or DEFAULT_MODEL
         self.cache_path = Path(cache_path)
         self._cache = self._load_cache()
 
@@ -74,11 +83,11 @@ class AIProvider:
             if p.weight is None or p.price is None
         ]
         if not targets:
-            _report("所有备件已包含重量和单价，无需调用 DeepSeek。")
+            _report("所有备件已包含重量和单价，无需调用 AI。")
             return stats
 
         stats["requested"] = len(targets)
-        _report(f"有 {len(targets)} 条备件缺少 重量/单价，开始用 DeepSeek 估算 ...")
+        _report(f"有 {len(targets)} 条备件缺少 重量/单价，开始用 AI 估算 ...")
 
         # 1) 先用本地缓存
         pending = []
@@ -97,7 +106,7 @@ class AIProvider:
         # 2) 分批调用 API
         batches = [pending[k:k + BATCH_SIZE] for k in range(0, len(pending), BATCH_SIZE)]
         for bi, batch in enumerate(batches, 1):
-            _report(f"正在请求 DeepSeek（批次 {bi}/{len(batches)}，{len(batch)} 条）...")
+            _report(f"正在请求 AI（批次 {bi}/{len(batches)}，{len(batch)} 条）...")
             results = self._call_batch(batch)
             if results is None:
                 stats["errors"] += len(batch)
@@ -122,12 +131,12 @@ class AIProvider:
                 stats["filled"] += 1
             self._save_cache()
 
-        _report(f"DeepSeek 估算完成：新增 {stats['filled']} 条，失败 {stats['errors']} 条。")
+        _report(f"AI 估算完成：新增 {stats['filled']} 条，失败 {stats['errors']} 条。")
         return stats
 
     # ---- API -----------------------------------------------------------
     def _call_batch(self, batch):
-        """Call DeepSeek for one batch; returns {id_str: {weight_kg, unit_price}} or None."""
+        """Call the AI for one batch; returns {id_str: {weight_kg, unit_price}} or None."""
         lines = []
         for idx, (i, part) in enumerate(batch, 1):
             spec = part.type or "无"
@@ -139,7 +148,7 @@ class AIProvider:
         )
 
         body = {
-            "model": MODEL,
+            "model": self.model,
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
@@ -176,10 +185,11 @@ class AIProvider:
         return mapping
 
     def _post_json(self, body: dict):
-        """POST to DeepSeek and return the assistant message text (or None on failure)."""
+        """POST to the configured chat completions endpoint and return the assistant message text (or None on failure)."""
+        url = f"{self.api_url.rstrip('/')}/chat/completions"
         payload = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
-            API_URL,
+            url,
             data=payload,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
@@ -225,7 +235,13 @@ class AIProvider:
             return None
 
 
-def enrich_parts(parts, api_key, cache_path=CACHE_PATH, on_status=None) -> dict:
-    """便捷入口：创建 provider 并 enrich。"""
-    provider = AIProvider(api_key=api_key, cache_path=cache_path)
+def enrich_parts(parts, api_key, cache_path=CACHE_PATH, on_status=None, api_url=None, model=None) -> dict:
+    """便捷入口：创建 provider 并 enrich。api_url/model 缺省时读 config/env（见 config.get_ai_config）。"""
+    if api_url is None or model is None:
+        from cdf_helper.config import get_ai_config
+
+        cfg = get_ai_config()
+        api_url = api_url or cfg["api_url"]
+        model = model or cfg["model"]
+    provider = AIProvider(api_key=api_key, cache_path=cache_path, api_url=api_url, model=model)
     return provider.enrich(parts, on_status=on_status)

@@ -6,7 +6,7 @@
 
 - **智能解析**：自动识别多种Excel表头格式（中文签收单/物料清单 + 英文Packing List）
 - **船名识别**：从来源文件自动提取船名，并匹配中英文对照表
-- **AI估算**：可选通过 DeepSeek API 估算缺失的重量/单价（带本地缓存）
+- **AI估算**：可选通过 AI 估算缺失的重量/单价（带本地缓存）
 - **双界面**：Web 界面 + 命令行模式
 - **模板驱动**：基于Excel模板生成，保持与模板一致的样式
 
@@ -25,7 +25,7 @@ Web 界面访问：http://127.0.0.1:5000
 1. 上传报关清单模板（.xlsx）
 2. 上传一个或多个备件来源文件（.xls/.xlsx）
 3. 填写船名（留空则自动识别）、目的港、日期
-4. 可选：勾选「DeepSeek 智能填写」估算缺失的重量/单价
+4. 可选：勾选「AI 智能填写」估算缺失的重量/单价
 5. 点击「生成报关清单」，完成后下载
 
 ### 命令行
@@ -36,14 +36,16 @@ python main.py generate \
   --vessel "远怡湖 COSMERRY LAKE" \
   --port 上海 \
   --date 2026-08-20 \
-  --ai --api-key YOUR_DEEPSEEK_KEY
+  --ai --api-key YOUR_API_KEY
 ```
 
 ### AI Key 配置
-DeepSeek API Key 优先级：
-1. `--api-key` 参数
-2. 环境变量 `DEEPSEEK_API_KEY`
-3. `config.json`（通过 Web 界面「保存 API Key」保存）
+AI API Key / 端点 / 模型 优先级（环境变量 > `config.json`）：
+1. 命令行参数 `--api-key` / `--api-url` / `--model`
+2. 环境变量 `AI_API_KEY` / `AI_API_URL` / `AI_MODEL`
+3. `config.json`（通过 Web 界面「保存」保存，默认 DeepSeek：`https://api.deepseek.com` / `deepseek-chat`）
+
+任何 OpenAI 兼容端点都可用，例如在 Web 界面填 API 基础地址 `https://api.openai.com/v1`、模型 `gpt-4o-mini`。
 
 ## 模板格式要求
 
@@ -81,12 +83,12 @@ python test_ai.py && python test_web.py && python test_packing.py
 ├── cdf_helper/
 │   ├── parser.py        # 来源文件解析
 │   ├── generator.py     # 模板填充/生成
-│   ├── ai.py            # DeepSeek估算
+│   ├── ai.py            # AI 智能估算
 │   └── config.py        # API Key配置
 ├── uploads/             # 上传文件目录（gitignore）
 ├── generated/           # 生成文件目录（gitignore）
 ├── config.json          # 本地配置（gitignore）
-└── ai_cache.json        # DeepSeek结果缓存（gitignore）
+└── ai_cache.json        # AI 结果缓存（gitignore）
 ```
 
 ## 依赖

@@ -7,7 +7,7 @@
 
 ## 1. 项目概述
 
-CDF Helper（报关清单生成器）根据备件来源 Excel（.xls / .xlsx）自动生成海关报关清单（Customs Declaration Form，报关清单）。用户提供模板文件与一个或多个备件来源文件，程序自动定位表头、解析备件（名称/规格/数量/单位），并可选调用 DeepSeek 估算缺失的“重量 / 单价”，最终按模板样式输出可打印的 Excel 清单。
+CDF Helper（报关清单生成器）根据备件来源 Excel（.xls / .xlsx）自动生成海关报关清单（Customs Declaration Form，报关清单）。用户提供模板文件与一个或多个备件来源文件，程序自动定位表头、解析备件（名称/规格/数量/单位），并可选调用 AI 估算缺失的“重量 / 单价”，最终按模板样式输出可打印的 Excel 清单。
 
 ## 2. 目录结构
 
@@ -18,9 +18,9 @@ D:\CDF_helper\
 ├── requirements.txt         # 依赖：flask / openpyxl / xlrd
 ├── 启动CDF助手.bat          # Windows 双击启动（纯 ASCII，避免编码问题）
 ├── test_web.py              # Web 端到端测试（Flask test client）
-├── test_ai.py               # DeepSeek 模块单元测试（mock 后端）
+├── test_ai.py               # AI 模块单元测试（mock 后端）
 ├── templates/
-│   ├── index.html           # 首页表单（模板/来源/清单信息/DeepSeek）
+│   ├── index.html           # 首页表单（模板/来源/清单信息/AI）
 │   └── result.html          # 生成结果页（统计 + 下载链接）
 ├── static/
 │   └── style.css            # 页面样式
@@ -28,12 +28,12 @@ D:\CDF_helper\
 │   ├── __init__.py
 │   ├── parser.py            # 来源文件解析（表头自动识别）
 │   ├── generator.py         # 模板填充 / 生成工作簿
-│   ├── ai.py                # DeepSeek 估算 + 本地缓存
+│   ├── ai.py                # AI 估算 + 本地缓存
 │   └── config.py            # API Key 配置读写
 ├── uploads/                 # 上传的模板/来源文件（gitignore）
 ├── generated/               # 生成的报关清单（gitignore）
 ├── config.json              # 本地配置（API Key，gitignore）
-├── ai_cache.json            # DeepSeek 结果缓存（gitignore）
+├── ai_cache.json            # AI 结果缓存（gitignore）
 └── 模板文件/来源文件示例       # 用户数据，不入库
 ```
 
@@ -43,7 +43,7 @@ D:\CDF_helper\
 来源文件(.xls/.xlsx) ──► parser.parse_sources ──► List[Part]
                                                     │
                       ┌─────────────────────────────┤
-                      │ 可选：DeepSeek              │
+                      │ 可选：AI                  │
                       │ ai.enrich_parts（只补缺失）  │
                       └─────────────────────────────┤
                                                     ▼
@@ -130,9 +130,9 @@ class Part:
 - `_display_name`：`include_spec=True` 时拼 `名称 + 空格 + 规格`，否则仅名称。
 - `sanitize_filename`：剔除 Windows 非法字符 `\/:*?"<>|` 等，用于输出文件名 `<船名>-<港>-报关清单-<日期>.xlsx`。
 
-### 5.3 `cdf_helper/ai.py` — DeepSeek 智能估算
+### 5.3 `cdf_helper/ai.py` — AI 智能估算
 
-- 端点：`https://api.deepseek.com/chat/completions`，模型 `deepseek-chat`，`response_format={"type":"json_object"}`。
+- 端点：`https://api.deepseek.com/chat/completions`，模型 `deepseek-chat`，`response_format={"type":"json_object"}`。**Provider 可配置**：`AIProvider(api_key, api_url, model)` 与 `enrich_parts(..., api_url, model)` 支持任何 OpenAI 兼容端点（如 `https://api.openai.com/v1` + `gpt-4o-mini`），缺省时经 `config.get_ai_config()` 读取环境变量 / `config.json`。
 - **只填补缺失字段**（`weight is None or price is None`），不覆盖来源已有值。
 - 分批（`BATCH_SIZE=50`）请求，避免 500 条物料产生 500 次调用。
 - 缓存 `ai_cache.json`：key = `sha1(名称|规格)`，命中即免调用、免计费；失败项也会写缓存（存 None）防止重复请求。
@@ -142,17 +142,18 @@ class Part:
 
 ### 5.3 `cdf_helper/config.py` — 配置
 
-- `config.json` 存 API Key 等本地配置。
-- 优先级：环境变量 `DEEPSEEK_API_KEY` > `config.json`。
+- `config.json` 存 API Key / base URL / model 等本地配置。
+- 优先级：环境变量 `AI_API_KEY` / `AI_API_URL` / `AI_MODEL` > `config.json`；缺失回退 DeepSeek 默认（`https://api.deepseek.com` / `deepseek-chat`）。
+- `get_ai_config()` 返回合并后的 `{api_key, api_url, model}`（供 webapp / main / enrich_parts 统一读取）。
 - `save_config()` 只更新传入字段，保留其他配置。
 
 ### 5.4 `webapp.py` — Flask Web
 
 - `GET /`：首页，列出服务器根目录可选的模板与来源文件，回填配置中的 API Key。
-- `POST /generate`：处理上传（`template_upload` / `sources_upload`，存入 `uploads/`）或服务器文件选择（`template_path` / `source_paths`）→ **模板布局预检**（`validate_template`，提前弹出错误提示，避免浪费解析/AI 时间）→ 解析 → 可选 DeepSeek → 生成到 `generated/` → 渲染 result 页。
+- `POST /generate`：处理上传（`template_upload` / `sources_upload`，存入 `uploads/`）或服务器文件选择（`template_path` / `source_paths`）→ **模板布局预检**（`validate_template`，提前弹出错误提示，避免浪费解析/AI 时间）→ 解析 → 可选 AI → 生成到 `generated/` → 渲染 result 页。
 - `GET /download/<file>`：仅允许从 `generated/` 目录内下载（防目录穿越）。
 - 启动时清理 `uploads/`、`generated/` 中超过 7 天的旧文件（`_cleanup_old_files`）。
-- 表单字段：`vessel`（留空自动识别）、`port`、`date`、`include_spec`、`use_ai`、`api_key`、`save_key`。
+- 表单字段：`vessel`（留空自动识别）、`port`、`date`、`include_spec`、`use_ai`、`api_key`、`api_url_base`、`model`、`save_key`。
 
 ### 5.5 `main.py` — 入口
 
@@ -160,7 +161,7 @@ class Part:
 - `generate` 子命令：完整 CLI 流程，新增 `--ai` / `--api-key`。
 - 交互兜底：未传 `--template/--source/--vessel` 时逐项询问。
 
-## 6. DeepSeek 提示词设计
+## 6. AI 提示词设计
 
 - System：强调角色（船舶备件采购/海关申报助理）、估算口径（重量 KG、单价 RMB、保守合理）、无法判断返回 null。
 - User：逐条列出 `编号. 名称；规格；单位`，要求仅输出 `{"items":[{"id":1,"weight_kg":…,"unit_price":…}]}`。

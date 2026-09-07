@@ -41,8 +41,8 @@ webapp.py                # Flask app, routes: GET /, POST /generate, GET /downlo
 cdf_helper/
 ├── parser.py    # Excel → List[Part] (Chinese headers + English packing lists + multi-line cells + vessel detection)
 ├── generator.py # fills template.xlsx → output .xlsx
-├── ai.py        # DeepSeek enrichment for missing weight/price (batching + local cache)
-├── config.py    # API key from env DEEPSEEK_API_KEY > config.json
+├── ai.py        # AI enrichment for missing weight/price (batching + local cache)
+├── config.py    # AI key/base-URL/model from env (AI_API_KEY/URL/MODEL) > config.json
 └── __init__.py  # version 0.2.0
 ```
 
@@ -61,7 +61,7 @@ Entry points:
 - **Source files**: any `.xls`/`.xlsx` in the project root is a candidate. Files containing "船名" are treated as the vessel-name lookup table, not source data. Files containing "报关清单" are treated as templates. `test_web.py` previously used `glob("*.xls*")` to pick up both `.xls` and `.xlsx` from root.
 - **Packed single-column format**: when all header fields (序号/设备/名称/编号/单位/数量/备注) are in a single cell with 2+ space-separated headers, the parser detects this and uses `_parse_packed_sheet` to extract parts from space-separated data rows. Handles both multi-row (header and data in separate rows) and multi-line cell (header and data in same cell, newline-separated) variants.
 - **Vessel name**: auto-detected from source files. Format: `中文 英文` (e.g., `远怡湖 COSMERRY LAKE`), resolved via `中英文船名25-5-14.xls` lookup workbook. Trailing hyphens in English names (e.g. `YINNIAN-`) are stripped.
-- **AI**: optional (`--ai` flag or "use_ai" checkbox). Key from `--api-key`, `config.json`, or `DEEPSEEK_API_KEY` env var. Results cached in `ai_cache.json` (keyed by `sha1(name|spec)`) to avoid repeat charges. API failures are non-fatal — missing fields stay empty.
+- **AI**: optional (`--ai` flag or "use_ai" checkbox). Provider/base-URL/model and key are configurable: key from `--api-key`/`AI_API_KEY`/`config.json`; base URL from `--api-url`/`AI_API_URL`/`config.json` (default `https://api.deepseek.com`); model from `--model`/`AI_MODEL`/`config.json` (default `deepseek-chat`). Any OpenAI-compatible endpoint works (e.g. `https://api.openai.com/v1` + `gpt-4o-mini`). Results cached in `ai_cache.json` (keyed by `sha1(name|spec)`) to avoid repeat charges. API failures are non-fatal — missing fields stay empty.
 - **Filenames**: sanitized via `generator.sanitize_filename` (strips `\/:*?"<>|`). Output pattern: `<vessel>-<port>-报关清单-<date>.xlsx`.
 - **Temp files**: `uploads/` and `generated/` are gitignored. Old files (>7 days) are cleaned on webapp startup.
 
@@ -70,7 +70,7 @@ Entry points:
 - Tests run under `pytest`. Each `test_*.py` also runs standalone via its `pytest.main` guard.
 - `test_web.py` is **hermetic**: the template is read from the committed repo fixture and the source workbook is built in memory and uploaded through the Flask client, so it needs **no root data files** and is stable in CI (sample data files like `new file.xlsx`, `远棠湾-舟山.xlsx`, etc. are gitignored).
 - `test_packing.py` and `test_ai.py` are hermetic except for a few explicit "real file" checks, which `pytest.skip()` when their fixture is absent. The committed template workbook (`veseel name-destination port-报关清单-date.xlsx`) and the vessel lookup (`中英文船名25-5-14.xls`) are always available.
-- The AI tests mock the DeepSeek HTTP call (`AIProvider._post_json`) — no network.
+- The AI tests mock the AI HTTP call (`AIProvider._post_json`) — no network.
 - To run a single test: `python3 -m pytest test_packing.py::test_synthetic` (or filter with `-k test_synthetic`).
 
 ## CI

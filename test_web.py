@@ -104,21 +104,21 @@ def test_generate_error_when_no_sources(client):
 
 
 def test_generate_with_ai(monkeypatch, client):
-    def fake_enrich(parts, api_key, on_status=None):
+    def fake_enrich(parts, api_key, on_status=None, **kwargs):
         for p in parts:
             if p.weight is None:
                 p.weight = 9.9
             if p.price is None:
                 p.price = 88.8
         if on_status:
-            on_status("（模拟）DeepSeek 估算 2 条")
+            on_status("（模拟）AI 估算 2 条")
         return {"requested": 2, "filled": 2, "from_cache": 0, "errors": 0}
 
     monkeypatch.setattr(webapp, "enrich_parts", fake_enrich)
     tpl, src = _template_bytes(), _make_source_bytes()
     r = _generate(client, tpl, src, use_ai=True, api_key="sk-test")
     assert r.status_code == 200
-    assert "DeepSeek" in r.get_data(as_text=True)
+    assert "AI 智能填写" in r.get_data(as_text=True)
 
 
 def test_generate_ai_without_key(client):

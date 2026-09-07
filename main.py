@@ -51,8 +51,10 @@ def _parse_args(argv):
     g.add_argument("--port", default=None, help="目的港")
     g.add_argument("--date", default=None, help="日期（默认今天），如 2026-08-20")
     g.add_argument("--name-only", action="store_true", help="备件名称列只填名称，不拼接规格")
-    g.add_argument("--ai", action="store_true", help="用 DeepSeek 估算缺失的重量/单价")
-    g.add_argument("--api-key", default=None, help="DeepSeek API Key（默认读环境变量 DEEPSEEK_API_KEY 或 config.json）")
+    g.add_argument("--ai", action="store_true", help="用 AI 估算缺失的重量/单价")
+    g.add_argument("--api-key", default=None, help="AI API Key（默认读环境变量 AI_API_KEY 或 config.json）")
+    g.add_argument("--api-url", default=None, help="OpenAI 兼容 API 基础地址，如 https://api.openai.com/v1（默认 deepseek）")
+    g.add_argument("--model", default=None, help="模型名，如 deepseek-chat / gpt-4o-mini（默认 deepseek-chat）")
     return p.parse_args(argv)
 
 
@@ -223,15 +225,18 @@ def main(argv=None):
 
         api_key = args.api_key or app_config.get_api_key()
         if not api_key:
-            print("错误：使用 --ai 需要提供 API Key（--api-key 或环境变量 DEEPSEEK_API_KEY）。")
+            print("错误：使用 --ai 需要提供 API Key（--api-key 或环境变量 AI_API_KEY）。")
             return 1
-        print("正在用 DeepSeek 估算缺失的重量/单价 ...")
+        ai_cfg = app_config.get_ai_config()
+        api_url = args.api_url or ai_cfg["api_url"]
+        model = args.model or ai_cfg["model"]
+        print(f"正在用 {model} 估算缺失的重量/单价 ...")
 
         def ai_status(msg):
             print(f"  {msg}")
 
-        ai_stats = enrich_parts(parts, api_key, on_status=ai_status)
-        print(f"DeepSeek 完成：新增 {ai_stats['filled']} 条，失败 {ai_stats['errors']} 条。")
+        ai_stats = enrich_parts(parts, api_key, on_status=ai_status, api_url=api_url, model=model)
+        print(f"AI 完成：新增 {ai_stats['filled']} 条，失败 {ai_stats['errors']} 条。")
 
     output_dir = Path(args.output_dir) if args.output_dir else Path.cwd() / "output"
     output_name = f"{sanitize_filename(vessel)}-{sanitize_filename(port)}-{REPORT_LABEL}-{sanitize_filename(date)}.xlsx"

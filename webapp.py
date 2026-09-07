@@ -109,13 +109,16 @@ def _basename(path):
 @app.route("/")
 def index():
     files = _spreadsheets_in(BASE_DIR)
+    ai_cfg = app_config.get_ai_config()
     return render_template(
         "index.html",
         template_candidates=[f for f in files if f.suffix == ".xlsx"],
         server_template=_server_template_file(files),
         source_candidates=_server_source_files(files),
         today=datetime.date.today().isoformat(),
-        api_key_prefill=app_config.get_api_key(),
+        api_key_prefill=ai_cfg["api_key"],
+        api_url_prefill=ai_cfg["api_url"],
+        model_prefill=ai_cfg["model"],
     )
 
 
@@ -185,21 +188,31 @@ def do_generate():
     date = request.form.get("date", "").strip() or datetime.date.today().isoformat()
     include_spec = request.form.get("include_spec") == "on"
 
-    # --- optional: DeepSeek smart fill for weight / unit price ----------
+    # --- optional: AI smart fill for weight / unit price ------------------
     ai_stats = None
     ai_log = []
     if request.form.get("use_ai") == "on":
-        api_key = request.form.get("api_key", "").strip() or app_config.get_api_key()
-        if request.form.get("save_key") == "on" and api_key:
-            app_config.save_config({"api_key": api_key})
+        ai_cfg = app_config.get_ai_config()
+        api_key = request.form.get("api_key", "").strip() or ai_cfg["api_key"]
+        api_url = request.form.get("api_url_base", "").strip() or ai_cfg["api_url"]
+        model = request.form.get("model", "").strip() or ai_cfg["model"]
+        if request.form.get("save_key") == "on" and (api_key or api_url or model):
+            save = {}
+            if api_key:
+                save["api_key"] = api_key
+            if api_url:
+                save["api_url"] = api_url
+            if model:
+                save["model"] = model
+            app_config.save_config(save)
         if not api_key:
-            flash("已勾选 DeepSeek 智能填写，但未提供 API Key（或未设置环境变量 DEEPSEEK_API_KEY）。", "error")
+            flash("已勾选 AI 智能填写，但未提供 API Key（或未设置环境变量 AI_API_KEY）。", "error")
             return redirect(url_for("index"))
         try:
-            ai_stats = enrich_parts(parts, api_key, on_status=ai_log.append)
+            ai_stats = enrich_parts(parts, api_key, on_status=ai_log.append, api_url=api_url, model=model)
             warnings.extend(ai_log)
         except Exception as e:
-            flash(f"DeepSeek 调用失败：{e}", "error")
+            flash(f"AI 调用失败：{e}", "error")
             return redirect(url_for("index"))
 
     output_name = f"{sanitize_filename(vessel)}-{sanitize_filename(port)}-{REPORT_LABEL}-{sanitize_filename(date)}.xlsx"
