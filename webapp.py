@@ -5,7 +5,6 @@ Run with:  python main.py        (opens browser at http://127.0.0.1:5000)
 """
 
 import datetime
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -13,6 +12,7 @@ from pathlib import Path
 from flask import Flask, abort, flash, redirect, render_template, request, send_file, url_for
 
 from cdf_helper import config as app_config
+from cdf_helper import tasks
 from cdf_helper.ai import enrich_parts
 from cdf_helper.generator import generate, sanitize_filename, validate_template
 from cdf_helper.parser import (
@@ -54,27 +54,9 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = "cdf-helper"
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64 MB upload limit
 
-# --- background AI task registry (live progress) -------------------------
-# Heavy AI enrichment runs in a daemon worker thread so the HTTP request
-# returns a "processing" page immediately; the browser polls /status/<id>.
-_TASKS = {}
-_TASKS_LOCK = threading.Lock()
-
-
-def _new_task():
-    tid = uuid.uuid4().hex[:16]
-    task = {"status": "running", "log": [], "error": None, "result": None}
-    with _TASKS_LOCK:
-        _TASKS[tid] = task
-    return tid
-
-
-def _prune_tasks(max_age=900):
-    now = time.time()
-    with _TASKS_LOCK:
-        stale = [k for k, t in _TASKS.items() if now - t.get("ts", now) > max_age]
-        for k in stale:
-            _TASKS.pop(k, None)
+# Background AI enrichment runs in a daemon thread owned by cdf_helper.tasks
+# so the HTTP request returns a "processing" page immediately; the browser
+# polls /status/<id> for live progress and then /result/<id> when done.
 
 
 def _spreadsheets_in(directory):
@@ -257,43 +239,35 @@ def do_generate():
         batches = (missing + 49) // 50 if missing else 0
         estimated = batches * 5  # rough seconds, ~5s per batch
 
-        tid = _new_task()
-        task = _TASKS[tid]
+        def _worker(on_status):
+            log_lines = []
 
-        def _worker():
-            task["ts"] = time.time()
+            def capture(msg):
+                log_lines.append(msg)
+                on_status(msg)
+
             warnings_ = list(warnings)
-            try:
-                def on_status(msg):
-                    task["log"].append(msg)
+            stats = enrich_parts(parts, api_key, on_status=capture, api_url=api_url, model=model)
+            warnings_.extend(log_lines)
+            generate(
+                template_path=template,
+                parts=parts,
+                vessel_name=vessel,
+                output_dir=GENERATED_DIR,
+                output_name=out_path.name,
+                include_spec=include_spec,
+            )
+            return {
+                "file_name": out_path.name,
+                "vessel": vessel,
+                "port": port,
+                "date": date,
+                "item_count": len(parts),
+                "warnings": warnings_,
+                "ai_stats": stats,
+            }
 
-                stats = enrich_parts(parts, api_key, on_status=on_status, api_url=api_url, model=model)
-                warnings_.extend(task["log"])
-                generate(
-                    template_path=template,
-                    parts=parts,
-                    vessel_name=vessel,
-                    output_dir=GENERATED_DIR,
-                    output_name=out_path.name,
-                    include_spec=include_spec,
-                )
-                task["result"] = {
-                    "file_name": out_path.name,
-                    "vessel": vessel,
-                    "port": port,
-                    "date": date,
-                    "item_count": len(parts),
-                    "warnings": warnings_,
-                    "ai_stats": stats,
-                }
-                task["status"] = "done"
-            except Exception as e:
-                task["status"] = "error"
-                task["error"] = str(e)
-            finally:
-                _prune_tasks()
-
-        threading.Thread(target=_worker, daemon=True).start()
+        tid = tasks.submit(_worker)
         return render_template(
             "processing.html",
             task_id=tid,
@@ -329,27 +303,25 @@ def download(file_name):
 @app.route("/status/<task_id>")
 def status(task_id):
     """Polled by the processing page; returns the background AI task's state."""
-    with _TASKS_LOCK:
-        task = _TASKS.get(task_id)
-    if task is None:
+    t = tasks.status(task_id)
+    if t["status"] == "missing":
         return {"status": "missing"}, 404
     return {
-        "status": task.get("status", "running"),
-        "log": task.get("log", []),
-        "error": task.get("error"),
-        "done": task.get("status") == "done",
-        "result_url": url_for("result", task_id=task_id) if task.get("status") == "done" else None,
+        "status": t["status"],
+        "log": t["log"],
+        "error": t["error"],
+        "done": t["status"] == "done",
+        "result_url": url_for("result", task_id=task_id) if t["status"] == "done" else None,
     }
 
 
 @app.route("/result/<task_id>")
 def result(task_id):
     """Render the result page for a finished background AI task."""
-    with _TASKS_LOCK:
-        task = _TASKS.get(task_id)
-    if task is None or task.get("status") != "done":
+    t = tasks.status(task_id)
+    if t["status"] != "done":
         return redirect(url_for("index"))
-    r = task["result"]
+    r = t["result"]
     return render_template(
         "result.html",
         file_name=r["file_name"],
