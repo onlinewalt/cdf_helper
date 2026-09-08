@@ -7,6 +7,7 @@ files are gitignored).
 """
 import io
 import re
+import time
 
 import openpyxl
 import pytest
@@ -119,6 +120,57 @@ def test_generate_with_ai(monkeypatch, client):
     r = _generate(client, tpl, src, use_ai=True, api_key="sk-test")
     assert r.status_code == 200
     assert "AI 智能填写" in r.get_data(as_text=True)
+
+
+def test_generate_ai_async_polls_to_result(monkeypatch, client):
+    """With use_ai on, POST returns a processing page; /status is polled; then /result renders."""
+    import webapp as _w
+
+    def slow_fake(parts, api_key, on_status=None, **kw):
+        if on_status:
+            on_status("（模拟）AI 估算 2 条")
+        time.sleep(0.4)
+        for p in parts:
+            if p.weight is None:
+                p.weight = 9.9
+            if p.price is None:
+                p.price = 88.8
+        return {"requested": 2, "filled": 2, "from_cache": 0, "errors": 0}
+
+    monkeypatch.setattr(_w, "enrich_parts", slow_fake)
+    tpl, src = _template_bytes(), _make_source_bytes()
+    data = {
+        "vessel": "测试船",
+        "port": "测试港",
+        "date": "2026-08-20",
+        "template_upload": (io.BytesIO(tpl.getvalue()), "template.xlsx"),
+        "sources_upload": [(io.BytesIO(src.getvalue()), "source.xlsx")],
+        "use_ai": "on",
+        "api_key": "sk-test",
+    }
+    r = client.post("/generate", data=data, content_type="multipart/form-data")
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    assert "AI 智能填写进度" in body, "expected the processing/waiting page"
+
+    m = re.search(r'taskId = "([0-9a-f]{16})"', body)
+    assert m, "processing page must expose a task_id"
+    tid = m.group(1)
+
+    s = None
+    for _ in range(40):
+        s = client.get(f"/status/{tid}").get_json()
+        if s.get("status") in ("done", "error"):
+            break
+        time.sleep(0.1)
+    assert s.get("status") == "done", s
+    assert "（模拟）AI 估算 2 条" in " ".join(s.get("log") or []), s
+
+    url = s.get("result_url")
+    assert url, "done task must provide a result_url"
+    final = client.get(url)
+    assert final.status_code == 200
+    assert "清单已生成" in final.get_data(as_text=True)
 
 
 def test_generate_ai_without_key(client):

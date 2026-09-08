@@ -150,7 +150,7 @@ def _serve():
         webbrowser.open(url)
 
     threading.Thread(target=open_browser, daemon=True).start()
-    webapp.app.run(host="0.0.0.0", port=port, debug=False)
+    webapp.app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
 
 
 def main(argv=None):

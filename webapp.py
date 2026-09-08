@@ -5,6 +5,7 @@ Run with:  python main.py        (opens browser at http://127.0.0.1:5000)
 """
 
 import datetime
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -52,6 +53,28 @@ _cleanup_old_files(GENERATED_DIR)
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "cdf-helper"
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64 MB upload limit
+
+# --- background AI task registry (live progress) -------------------------
+# Heavy AI enrichment runs in a daemon worker thread so the HTTP request
+# returns a "processing" page immediately; the browser polls /status/<id>.
+_TASKS = {}
+_TASKS_LOCK = threading.Lock()
+
+
+def _new_task():
+    tid = uuid.uuid4().hex[:16]
+    task = {"status": "running", "log": [], "error": None, "result": None}
+    with _TASKS_LOCK:
+        _TASKS[tid] = task
+    return tid
+
+
+def _prune_tasks(max_age=900):
+    now = time.time()
+    with _TASKS_LOCK:
+        stale = [k for k, t in _TASKS.items() if now - t.get("ts", now) > max_age]
+        for k in stale:
+            _TASKS.pop(k, None)
 
 
 def _spreadsheets_in(directory):
@@ -189,9 +212,30 @@ def do_generate():
     include_spec = request.form.get("include_spec") == "on"
 
     # --- optional: AI smart fill for weight / unit price ------------------
+    # When enabled, the (slow) enrichment runs in a background thread so the
+    # page returns immediately and shows live progress; otherwise it stays
+    # synchronous (fast path).
     ai_stats = None
-    ai_log = []
-    if request.form.get("use_ai") == "on":
+    use_ai = request.form.get("use_ai") == "on"
+
+    output_name = f"{sanitize_filename(vessel)}-{sanitize_filename(port)}-{REPORT_LABEL}-{sanitize_filename(date)}.xlsx"
+    out_path = GENERATED_DIR / output_name
+    if out_path.exists():
+        out_path = GENERATED_DIR / f"{out_path.stem}-{uuid.uuid4().hex[:6]}{out_path.suffix}"
+
+    def _finish(ai_stats_, warnings_):
+        return render_template(
+            "result.html",
+            file_name=out_path.name,
+            vessel=vessel,
+            port=port,
+            date=date,
+            item_count=len(parts),
+            warnings=warnings_,
+            ai_stats=ai_stats_,
+        )
+
+    if use_ai:
         ai_cfg = app_config.get_ai_config()
         api_key = request.form.get("api_key", "").strip() or ai_cfg["api_key"]
         api_url = request.form.get("api_url_base", "").strip() or ai_cfg["api_url"]
@@ -208,18 +252,56 @@ def do_generate():
         if not api_key:
             flash("已勾选 AI 智能填写，但未提供 API Key（或未设置环境变量 AI_API_KEY）。", "error")
             return redirect(url_for("index"))
-        try:
-            ai_stats = enrich_parts(parts, api_key, on_status=ai_log.append, api_url=api_url, model=model)
-            warnings.extend(ai_log)
-        except Exception as e:
-            flash(f"AI 调用失败：{e}", "error")
-            return redirect(url_for("index"))
 
-    output_name = f"{sanitize_filename(vessel)}-{sanitize_filename(port)}-{REPORT_LABEL}-{sanitize_filename(date)}.xlsx"
-    out_path = GENERATED_DIR / output_name
-    if out_path.exists():
-        out_path = GENERATED_DIR / f"{out_path.stem}-{uuid.uuid4().hex[:6]}{out_path.suffix}"
+        missing = sum(1 for p in parts if p.weight is None or p.price is None)
+        batches = (missing + 49) // 50 if missing else 0
+        estimated = batches * 5  # rough seconds, ~5s per batch
 
+        tid = _new_task()
+        task = _TASKS[tid]
+
+        def _worker():
+            task["ts"] = time.time()
+            warnings_ = list(warnings)
+            try:
+                def on_status(msg):
+                    task["log"].append(msg)
+
+                stats = enrich_parts(parts, api_key, on_status=on_status, api_url=api_url, model=model)
+                warnings_.extend(task["log"])
+                generate(
+                    template_path=template,
+                    parts=parts,
+                    vessel_name=vessel,
+                    output_dir=GENERATED_DIR,
+                    output_name=out_path.name,
+                    include_spec=include_spec,
+                )
+                task["result"] = {
+                    "file_name": out_path.name,
+                    "vessel": vessel,
+                    "port": port,
+                    "date": date,
+                    "item_count": len(parts),
+                    "warnings": warnings_,
+                    "ai_stats": stats,
+                }
+                task["status"] = "done"
+            except Exception as e:
+                task["status"] = "error"
+                task["error"] = str(e)
+            finally:
+                _prune_tasks()
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return render_template(
+            "processing.html",
+            task_id=tid,
+            estimated=estimated,
+            missing=missing,
+        )
+
+    # --- synchronous path (no AI) ------------------------------------------
     try:
         generate(
             template_path=template,
@@ -233,16 +315,7 @@ def do_generate():
         flash(f"生成失败：{e}", "error")
         return redirect(url_for("index"))
 
-    return render_template(
-        "result.html",
-        file_name=out_path.name,
-        vessel=vessel,
-        port=port,
-        date=date,
-        item_count=len(parts),
-        warnings=warnings,
-        ai_stats=ai_stats,
-    )
+    return _finish(ai_stats, warnings)
 
 
 @app.route("/download/<path:file_name>")
@@ -253,5 +326,41 @@ def download(file_name):
     return send_file(target, as_attachment=True, download_name=target.name)
 
 
+@app.route("/status/<task_id>")
+def status(task_id):
+    """Polled by the processing page; returns the background AI task's state."""
+    with _TASKS_LOCK:
+        task = _TASKS.get(task_id)
+    if task is None:
+        return {"status": "missing"}, 404
+    return {
+        "status": task.get("status", "running"),
+        "log": task.get("log", []),
+        "error": task.get("error"),
+        "done": task.get("status") == "done",
+        "result_url": url_for("result", task_id=task_id) if task.get("status") == "done" else None,
+    }
+
+
+@app.route("/result/<task_id>")
+def result(task_id):
+    """Render the result page for a finished background AI task."""
+    with _TASKS_LOCK:
+        task = _TASKS.get(task_id)
+    if task is None or task.get("status") != "done":
+        return redirect(url_for("index"))
+    r = task["result"]
+    return render_template(
+        "result.html",
+        file_name=r["file_name"],
+        vessel=r["vessel"],
+        port=r["port"],
+        date=r["date"],
+        item_count=r["item_count"],
+        warnings=r["warnings"],
+        ai_stats=r["ai_stats"],
+    )
+
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, threaded=True)
