@@ -43,6 +43,7 @@ cdf_helper/
 ├── generator.py # fills template.xlsx → output .xlsx
 ├── ai.py        # AI enrichment for missing weight/price (batching + local cache)
 ├── config.py    # AI key/base-URL/model from env (AI_API_KEY/URL/MODEL) > config.json
+├── tasks.py     # async background task runner (submit/status) — powers live AI-progress UI
 └── __init__.py  # version 0.2.0
 ```
 
@@ -64,6 +65,8 @@ Entry points:
 - **AI**: optional (`--ai` flag or "use_ai" checkbox). Provider/base-URL/model and key are configurable: key from `--api-key`/`AI_API_KEY`/`config.json`; base URL from `--api-url`/`AI_API_URL`/`config.json` (default `https://api.deepseek.com`); model from `--model`/`AI_MODEL`/`config.json` (default `deepseek-chat`). Any OpenAI-compatible endpoint works (e.g. `https://api.openai.com/v1` + `gpt-4o-mini`). Results cached in `ai_cache.json` (keyed by `sha1(name|spec)`) to avoid repeat charges. API failures are non-fatal — missing fields stay empty.
 - **Filenames**: sanitized via `generator.sanitize_filename` (strips `\/:*?"<>|`). Output pattern: `<vessel>-<port>-报关清单-<date>.xlsx`.
 - **Temp files**: `uploads/` and `generated/` are gitignored. Old files (>7 days) are cleaned on webapp startup.
+- **Async AI progress**: when `use_ai` is on, AI enrichment + generation run in a background thread (`cdf_helper/tasks.py`); the browser shows a live-progress page polling `/status/<id>` then `/result/<id>` — no frozen UI or server timeouts. Without AI, `/generate` is synchronous. (ADR-0001.)
+- **UI design system**: front-end styled to the Cohere home-page design system (tokens: deep-green `#003c33` / near-black `#17171c` primary / action-blue `#1863dc` / coral `#ff7759`; flat surfaces, 32px pill primary CTAs, radius scale xs4/sm8/md16/lg22/pill32). Reference: `D:\awesome-design-md\design-md\cohere\DESIGN.md`. Fonts kept as the project's existing `"Microsoft YaHei"/"PingFang SC"` stack (Cohere prescribes proprietary CohereText/Unica77; the spec directs external implementors to use fallbacks).
 
 ## Testing notes
 

@@ -7,21 +7,32 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>CDF Helper · 报关清单生成器</h1>
-            <p class="subtitle">生成结果</p>
-        </header>
+    <header class="site-header">
+        <h1>CDF Helper · 报关清单生成器</h1>
+        <p class="subtitle">生成结果</p>
+    </header>
 
+    <main>
         <div class="card">
-            <h2 class="ok">清单已生成</h2>
-            <p><strong>文件名：</strong>{{ file_name }}</p>
-            <p><strong>船名：</strong>{{ vessel or '（未识别到）' }}　<strong>目的港：</strong>{{ port or '-' }}　<strong>日期：</strong>{{ date }}</p>
-            <p><strong>备件条数：</strong>{{ item_count }}</p>
+
+            <!-- Cohere HP: result confirmation in a deep-green product band -->
+            <div class="result-band-ok">
+                <h2>清单已生成</h2>
+            </div>
+
+            <div class="meta">
+                <strong>文件名：</strong>{{ file_name }}
+            </div>
+            <p class="meta">
+                <strong>船名：</strong>{{ vessel or '（未识别到）' }}　
+                <strong>目的港：</strong>{{ port or '-' }}　
+                <strong>日期：</strong>{{ date }}
+            </p>
+            <p class="meta"><strong>备件条数：</strong>{{ item_count }}</p>
 
             {% if ai_stats %}
                 <div class="ai-summary">
-                    <h3>AI 智能填写</h3>
+                    <h3 style="color:var(--coral);">AI 智能填写</h3>
                     <p>缺少 重量/单价 的备件：{{ ai_stats.requested }} 条；命中本地缓存：{{ ai_stats.from_cache }} 条；
                         本次新增估算：{{ ai_stats.filled }} 条；失败/未识别：{{ ai_stats.errors }} 条。</p>
                 </div>
@@ -38,11 +49,12 @@
                 </div>
             {% endif %}
 
+            <!-- Cohere HP: near-black 32px pill primary CTA -->
             <div class="actions">
                 <a class="btn btn-primary" href="{{ url_for('download', file_name=file_name) }}">下载报关清单</a>
-                <a class="btn" href="{{ url_for('index') }}">再生成一份</a>
+                <a class="btn btn-ghost" href="{{ url_for('index') }}">再生成一份</a>
             </div>
         </div>
-    </div>
+    </main>
 </body>
 </html>

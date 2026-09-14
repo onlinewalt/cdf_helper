@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8">
@@ -7,109 +7,127 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>CDF Helper · 报关清单生成器</h1>
-            <p class="subtitle">根据备件来源 Excel，自动生成报关清单</p>
-        </header>
+    <!-- Cohere HP: full-width deep-green product band as site header -->
+    <header class="site-header">
+        <h1>CDF Helper · 报关清单生成器</h1>
+        <p>根据备件来源 Excel，自动生成海关报关清单</p>
+    </header>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% for category, msg in messages %}
-                <div class="flash flash-{{ category }}">{{ msg }}</div>
-            {% endfor %}
-        {% endwith %}
-
+    <main>
         <form method="post" action="{{ url_for('do_generate') }}" enctype="multipart/form-data">
-            <section>
-                <h2>1. 模板文件</h2>
-                <label class="opt-label">
-                    <span>从服务器已有文件选择：</span>
-                    <select name="template_path">
-                        {% if server_template %}
-                            <option value="{{ server_template.name }}" selected>{{ server_template.name }}</option>
-                        {% endif %}
-                        {% for f in template_candidates %}
-                            {% if f != server_template %}
-                                <option value="{{ f.name }}">{{ f.name }}</option>
+            <div class="card">
+
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% for category, msg in messages %}
+                        <div class="flash flash-{{ category }}">{{ msg }}</div>
+                    {% endfor %}
+                {% endwith %}
+
+                <section>
+                    <h2>1. 模板文件</h2>
+                    <label class="opt-label">
+                        <span>从服务器已有文件选择：</span>
+                        <select name="template_path">
+                            {% if server_template %}
+                                <option value="{{ server_template.name }}" selected>{{ server_template.name }}</option>
                             {% endif %}
-                        {% endfor %}
-                    </select>
-                </label>
-{#                <label class="opt-label">#}
-{#                    <span>或上传新模板 (.xlsx)：</span>#}
-{#                    <input type="file" name="template_upload" accept=".xlsx">#}
-{#                </label>#}
-            </section>
+                            {% for f in template_candidates %}
+                                {% if f != server_template %}
+                                    <option value="{{ f.name }}">{{ f.name }}</option>
+                                {% endif %}
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <label class="opt-label">
+                        <span>或上传新模板 (.xlsx)：</span>
+                        <input type="file" name="template_upload" accept=".xlsx">
+                    </label>
+                </section>
 
-            <section>
-                <h2>2. 备件来源文件</h2>
-                <label class="opt-label">
-                    <span>上传来源文件（可多选，支持 .xls / .xlsx）：</span>
-                    <input type="file" name="sources_upload" multiple accept=".xls,.xlsx">
-                </label>
-                <div class="opt-label">
-                    <span>或从服务器已有文件选择：</span>
-                    <div class="check-grid">
-                        {% for f in source_candidates %}
-                            <label class="check-item">
-                                <input type="checkbox" name="source_paths" value="{{ f.name }}"> {{ f.name }}
-                            </label>
-                        {% else %}
-                            <span class="muted">服务器上没有其他备件来源文件。</span>
-                        {% endfor %}
+                <section>
+                    <h2>2. 备件来源文件</h2>
+                    <label class="opt-label">
+                        <span>上传来源文件（可多选，支持 .xls / .xlsx）：</span>
+                        <input type="file" name="sources_upload" multiple accept=".xls,.xlsx">
+                    </label>
+                    <div class="opt-label">
+                        <span>或从服务器已有文件选择：</span>
+                        <div class="check-grid">
+                            {% for f in source_candidates %}
+                                <label class="check-item">
+                                    <input type="checkbox" name="source_paths" value="{{ f.name }}"> {{ f.name }}
+                                </label>
+                            {% else %}
+                                <span class="muted">服务器上没有其他备件来源文件。</span>
+                            {% endfor %}
+                        </div>
                     </div>
-                </div>
-            </section>
+                </section>
 
-            <section>
-                <h2>3. 清单信息</h2>
-                <div class="field">
-                    <label for="vessel">船名（留空则自动识别）：</label>
-                    <input type="text" id="vessel" name="vessel" placeholder="例如 人马座">
-                </div>
-                <div class="field">
-                    <label for="port">目的港：</label>
-                    <input type="text" id="port" name="port" placeholder="例如 上海">
-                </div>
-                <div class="field">
-                    <label for="date">日期：</label>
-                    <input type="date" id="date" name="date" value="{{ today }}">
-                </div>
-                <label class="check-line">
-                    <input type="checkbox" name="include_spec">
-                    备件名称拼接规格 / 型号
-                </label>
-            </section>
+                <section>
+                    <h2>3. 清单信息</h2>
+                    <div class="field">
+                        <label for="vessel">船名（留空则自动识别）：</label>
+                        <input type="text" id="vessel" name="vessel" placeholder="例如 人马座">
+                    </div>
+                    <div class="field">
+                        <label for="port">目的港：</label>
+                        <input type="text" id="port" name="port" placeholder="例如 上海">
+                    </div>
+                    <div class="field">
+                        <label for="date">日期：</label>
+                        <input type="date" id="date" name="date" value="{{ today }}">
+                    </div>
+                    <label class="check-line">
+                        <input type="checkbox" name="include_spec">
+                        备件名称拼接规格 / 型号
+                    </label>
+                </section>
 
-            <section>
-                <h2>4. AI 智能填写（可选）</h2>
-                <p class="muted">为来源文件中缺少“重量 / 单价”的备件调用 AI 估算并填入清单。</p>
-                <label class="check-line">
-                    <input type="checkbox" id="use_ai" name="use_ai">
-                    使用 AI 估算缺失的重量 / 单价
-                </label>
-                <div class="field" id="ai_key_field" style="display:none;">
-                    <label for="api_key">AI API Key：</label>
-                    <input type="password" id="api_key" name="api_key" value="{{ api_key_prefill }}"
-                           placeholder="sk-...（留空则读取环境变量 AI_API_KEY）">
-                    <label for="api_url_base">API 基础地址（可选，默认 DeepSeek）：</label>
-                    <input type="text" id="api_url_base" name="api_url_base" value="{{ api_url_prefill }}"
-                           placeholder="https://api.openai.com/v1">
-                    <label for="model">模型（可选，默认 deepseek-chat）：</label>
-                    <input type="text" id="model" name="model" value="{{ model_prefill }}"
-                           placeholder="deepseek-chat / gpt-4o-mini">
-                </div>
-                <label class="check-line" id="save_key_line" style="display:none;">
-                    <input type="checkbox" name="save_key" checked>
-                    将 API Key 保存到本地 config.json（下次免填）
-                </label>
-            </section>
+                <!-- 4. AI: visible-by-default collapsible, coral-accented -->
+                <section>
+                    <h2 style="display:flex;align-items:center;gap:var(--space-xs);">
+                        AI 智能填写
+                        <span style="font-size:12px;color:var(--coral);font-weight:400;">· optional</span>
+                    </h2>
+                    <p class="muted" style="margin:0 0 var(--space-md);font-size:13px;">
+                        为缺失 重量/单价 的备件估算；已有值原样保留。后台运行，生成页可查看实时进度。
+                    </p>
+                    <details open style="border-top:1px solid var(--hairline);border-radius:var(--radius-xs);overflow:hidden;">
+                        <summary style="cursor:pointer;padding:var(--space-sm) var(--space-md);font-size:13px;font-weight:600;color:var(--deep-green);">AI 配置（可选）</summary>
+                        <div class="field">
+                            <label class="check-line">
+                                <input type="checkbox" id="use_ai" name="use_ai">
+                                开启 AI 估算缺失的重量 / 单价
+                            </label>
+                            <div class="field" id="ai_key_field" style="display:none;margin-top:var(--space-sm);">
+                                <label for="api_key">AI API Key：</label>
+                                <input type="password" id="api_key" name="api_key" value="{{ api_key_prefill }}"
+                                       placeholder="sk-...（留空则读取环境变量 AI_API_KEY）">
+                                <label for="api_url_base" style="margin-top:var(--space-sm);">API 基础地址（可选，默认 DeepSeek）：</label>
+                                <input type="text" id="api_url_base" name="api_url_base" value="{{ api_url_prefill }}"
+                                       placeholder="https://api.openai.com/v1">
+                                <label for="model" style="margin-top:var(--space-sm);">模型（可选，默认 deepseek-chat）：</label>
+                                <input type="text" id="model" name="model" value="{{ model_prefill }}"
+                                       placeholder="deepseek-chat / gpt-4o-mini">
+                            </div>
+                            <label class="check-line" id="save_key_line" style="display:none;">
+                                <input type="checkbox" name="save_key" checked>
+                                将 API Key 保存到本地 config.json（下次免填）
+                            </label>
+                        </div>
+                    </details>
+                </section>
 
-            <div class="actions">
-                <button type="submit" class="btn btn-primary">生成报关清单</button>
+                <div class="actions">
+                    <!-- Cohere HP: near-black 32px-pill primary CTA -->
+                    <button type="submit" class="btn btn-primary">生成报关清单</button>
+                    <a class="btn btn-secondary" href="{{ url_for('index') }}">清空重选</a>
+                </div>
             </div>
         </form>
-    </div>
+    </main>
+
     <script>
         const useAi = document.getElementById('use_ai');
         const keyField = document.getElementById('ai_key_field');

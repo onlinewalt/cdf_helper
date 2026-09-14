@@ -1,152 +1,272 @@
+/* Cohere home-page token system, adapted to CDF Helper (fonts kept as existing).
+   Spec: D:\awesome-design-md\design-md\cohere\DESIGN.md
+   Font note: Cohere prescribes CohereText/Unica77; the spec itself directs
+   external implementors to Inter/Arial/system-fallbacks. CDF keeps its
+   "Microsoft YaHei","PingFang SC" stack (required for the Chinese copy) in
+   lieu of self-hosting the proprietary fonts. */
 :root {
-    --primary: #1f6fb2;
-    --primary-dark: #185a90;
-    --bg: #f4f6f8;
-    --card: #ffffff;
-    --border: #d9dee3;
-    --muted: #6b7683;
-    --danger: #b3423a;
+    /* Canvas & surfaces */
+    --canvas: #ffffff;          /* Cohere canvas */
+    --surface: #ffffff;
+    --deep-green: #003c33;      /* dark product band / header */
+    --deep-navy: #071829;      /* alternative product band */
+    --soft-stone: #eeece7;      /* warm neutral card surface */
+
+    /* Brand & accent (near-black primary) */
+    --primary: #17171c;        /* Cohere near-black */
+    --ink: #212121;            /* body text */
+    --action-blue: #1863dc;    /* editorial links / secondary action */
+    --coral: #ff7759;          /* small accents/chips only */
+    --on-primary: #ffffff;     /* text on near-black */
+    --error: #b30000;
+
+    /* Rules & muted */
+    --hairline: #d9d9dd;       /* standard rules / dividers */
+    --border-light: #e5e7eb;
+    --muted: #93939f;         /* footer/secondary */
+    --body-muted: #616161;
+
+    /* Radius scale (Cohere: xs 4 / sm 8 / md 16 / lg 22 / xl 30 / pill 32) */
+    --radius-xs: 4px;
+    --radius-sm: 8px;
+    --radius-md: 16px;
+    --radius-lg: 22px;
+    --radius-xl: 30px;
+    --radius-full: 9999px;
+
+    /* Spacing (8px base: xs2/xs6/sm8/md12/lg16/xl24/xxl32/section80) */
+    --space-xxs: 2px;
+    --space-xs: 6px;
+    --space-sm: 8px;
+    --space-md: 12px;
+    --space-lg: 16px;
+    --space-xl: 24px;
+    --space-xxl: 32px;
+    --space-section: 80px;
 }
 
 * { box-sizing: border-box; }
 
 body {
     margin: 0;
-    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
-    background: var(--bg);
-    color: #222;
+    font-family: "Microsoft YaHei", "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Arial, ui-sans-serif, system-ui, sans-serif;
+    background: var(--canvas);
+    color: var(--ink);
     line-height: 1.5;
 }
 
-.container {
+/* ---- Header: full-width deep-green band (Cohere HP hero band) ---- */
+header.site-header {
+    background: var(--deep-green);
+    color: var(--on-primary);
+    padding: var(--space-lg) var(--space-xl);
+}
+header.site-header h1 {
+    margin: 0;
+    font-size: 48px;       /* section-heading weight */
+    font-weight: 400;
+    letter-spacing: -0.48px;
+}
+header.site-header p {
+    margin: 4px 0 0;
+    font-size: 18px;        /* body-large */
+    font-weight: 400;
+    color: var(--on-primary);
+    opacity: 0.85;
+}
+
+/* ---- Page shell: white canvas, centered card ---- */
+main {
+    background: var(--canvas);
+    min-height: calc(100vh - 68px);
+    display: flex;
+    justify-content: center;
+    padding: var(--space-section) var(--space-md);
+}
+.card {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-md);   /* 16px product-card radius */
+    padding: var(--space-xl);
     max-width: 720px;
-    margin: 0 auto;
-    padding: 28px 20px 60px;
-}
-
-header h1 {
-    margin: 0 0 4px;
-    font-size: 24px;
-    color: var(--primary-dark);
-}
-
-.subtitle { margin: 0 0 18px; color: var(--muted); }
-
-section {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px 18px;
-    margin-bottom: 16px;
-}
-
-section h2 {
-    margin: 0 0 12px;
-    font-size: 15px;
-    color: var(--primary-dark);
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 8px;
-}
-
-.opt-label {
-    display: block;
-    margin-bottom: 12px;
-    font-size: 14px;
-}
-
-.opt-label span { display: block; margin-bottom: 4px; color: var(--muted); }
-
-select, input[type="text"], input[type="date"] {
     width: 100%;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font-size: 14px;
-    background: #fff;
+    box-shadow: none;                  /* Cohere: flat, no drop shadows */
 }
 
+/* ---- Sections inside a card ---- */
+.card section {
+    border-top: 1px solid var(--hairline);
+    padding: var(--space-lg) 0;
+}
+.card section:first-child { border-top: none; padding-top: 0; }
+.card section h2 {
+    margin: 0 0 var(--space-sm);
+    font-size: 24px;   /* feature-heading */
+    font-weight: 400;
+    color: var(--primary);
+}
+
+/* ---- Form rows ---- */
+.field { margin-bottom: var(--space-md); }
+.field label {
+    display: block;
+    margin-bottom: var(--space-xs);
+    font-size: 14px;
+    color: var(--body-muted);
+}
+.field input, .field select, .field textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-xs);    /* 4px inputs (search-field radius) */
+    font-size: 16px;
+    background: var(--surface);
+    color: var(--ink);
+}
+.field input:focus, .field select:focus, .field textarea:focus {
+    outline: none;
+    border-color: var(--action-blue);   /* Form Focus Violet -> action-blue (token kept) */
+    box-shadow: 0 0 0 2px #d6e4ff;
+}
+
+/* ---- File upload: Cohere hairline dashed input ---- */
 input[type="file"] {
-    display: block;
     width: 100%;
-    padding: 8px;
-    border: 1px dashed var(--border);
-    border-radius: 6px;
+    padding: 12px;
+    border: 1px dashed var(--hairline);
+    border-radius: var(--radius-xs);
     background: #fafbfc;
+    font-size: 14px;
 }
 
+/* ---- Checkbox / toggle ---- */
+.check-line { display: flex; align-items: center; gap: var(--space-xs); margin: var(--space-sm) 0; font-size: 14px; color: var(--ink); }
+.check-line input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--action-blue); }
+
+/* ---- Server file selection grid ---- */
 .check-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: 6px;
-    margin-top: 4px;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: var(--space-xs);
+    margin-top: var(--space-xs);
+}
+.check-item { font-size: 13px; display: flex; align-items: center; gap: var(--space-xs); }
+
+/* ---- Opt-label ---- */
+.opt-label { display: block; margin-bottom: var(--space-sm); font-size: 14px; }
+.opt-label span { display: block; margin-bottom: var(--space-xs); color: var(--muted); font-size: 13px; }
+
+select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-xs);
+    font-size: 14px;
+    background: var(--surface);
 }
 
-.check-item { font-size: 13px; }
-.check-line { display: block; margin-top: 10px; font-size: 14px; }
-
-.field { margin-bottom: 12px; }
-.field label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 14px; }
-
-.actions { margin-top: 20px; display: flex; gap: 12px; }
-
-.btn {
-    display: inline-block;
-    padding: 10px 22px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: #fff;
-    color: #333;
-    text-decoration: none;
-    font-size: 15px;
-    cursor: pointer;
-}
-
-.btn-primary {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: #fff;
-}
-
-.btn-primary:hover { background: var(--primary-dark); }
-
+/* ---- Flash messages ---- */
 .flash {
     padding: 10px 14px;
-    border-radius: 6px;
-    margin-bottom: 14px;
+    border-radius: var(--radius-xs);
+    margin-bottom: var(--space-md);
     font-size: 14px;
 }
+.flash-error { background: #fdecea; color: var(--error); border: 1px solid #fec8c8; }
+.flash-success { background: #ecfdf0; color: #057b3a; border: 1px solid #b7e0c9; }
 
-.flash-error { background: #fdecea; color: var(--danger); border: 1px solid #f5c6c1; }
-
-.card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 20px;
+/* ---- Buttons ---- */
+.actions { margin-top: var(--space-xl); display: flex; gap: var(--space-md); }
+.btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    text-decoration: none; font-size: 14px; font-weight: 500; cursor: pointer;
+    border: none; transition: opacity 0.12s ease;
 }
+.btn:disabled { opacity: 0.5; cursor: wait; }
+.btn-primary {
+    background: var(--primary);
+    color: var(--on-primary);
+    border-radius: var(--radius-full);  /* 32px pill (Cohere button-primary) */
+    padding: 10px 24px;
+}
+.btn-primary:hover { opacity: 0.9; }
+.btn-secondary {
+    background: transparent;
+    color: var(--action-blue);
+    border-radius: var(--radius-xs);
+    padding: 8px 0;
+    text-decoration: underline;
+}
+.btn-secondary:hover { opacity: 0.8; }
+.btn-ghost {
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    padding: 10px 20px;
+}
+.btn-ghost:hover { opacity: 0.85; }
 
-.card h2.ok { color: #2e7d32; margin-top: 0; }
-.muted { color: var(--muted); }
-
+/* ---- Result / warnings / ai summary blocks ---- */
 .warnings {
     background: #fff8e6;
     border: 1px solid #f0dfa8;
-    border-radius: 6px;
-    padding: 10px 14px;
-    margin: 14px 0;
+    border-radius: var(--radius-xs);
+    padding: var(--space-md);
+    margin: var(--space-lg) 0;
     font-size: 13px;
 }
-
-.warnings h3 { margin: 0 0 6px; font-size: 14px; color: #8a6d1a; }
+.warnings h3 { margin: 0 0 var(--space-xs); font-size: 14px; color: #7a5a00; }
 .warnings ul { margin: 0; padding-left: 18px; }
-
 .ai-summary {
-    background: #e8f4fd;
-    border: 1px solid #b8d9f0;
-    border-radius: 6px;
-    padding: 10px 14px;
-    margin: 14px 0;
+    background: var(--surface);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-xs);
+    padding: var(--space-md);
+    margin: var(--space-lg) 0;
     font-size: 13px;
 }
-.ai-summary h3 { margin: 0 0 6px; font-size: 14px; color: #1a5276; }
-.ai-summary p { margin: 0; }
+.ai-summary h3 { margin: 0 0 var(--space-xs); font-size: 14px; color: var(--deep-navy); }
+
+/* ---- Processing page: Cohere dark-product-band hero ---- */
+.processing-hero {
+    background: var(--deep-green);
+    color: var(--on-primary);
+    border-radius: var(--radius-md);
+    padding: var(--space-xxl);
+    text-align: center;
+}
+.processing-hero h2 { margin: 0; font-size: 32px; font-weight: 400; }
+.processing-hero p { margin: var(--space-sm) 0 0; opacity: 0.85; font-size: 16px; }
+.muted { color: var(--muted); }
+
+/* ---- Spinner ---- */
+.spinner {
+    width: 36px; height: 36px; margin: var(--space-md) auto;
+    border: 4px solid #d9e0e7; border-top-color: var(--action-blue);
+    border-radius: var(--radius-full);
+    animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.ai-log {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    padding: var(--space-md);
+    margin: var(--space-lg) 0;
+    font-size: 13px; text-align: left; max-height: 220px; overflow-y: auto;
+}
+.ai-log p { margin: 2px 0; }
+.hidden { display: none; }
+.error-msg { color: var(--error); margin-top: var(--space-sm); }
+
+/* ---- Result page: dark-product-band success band ---- */
+.result-band-ok {
+    background: var(--deep-green);
+    color: var(--on-primary);
+    border-radius: var(--radius-md);
+    padding: var(--space-xl);
+}
+.result-band-ok h2 { margin: 0; font-size: 28px; font-weight: 400; }
+.meta { font-size: 14px; opacity: 0.9; margin: var(--space-xs) 0 var(--space-lg); color: var(--on-primary); }
+.stat { background: var(--soft-stone); color: var(--deep-navy); border-radius: var(--radius-xs); padding: var(--space-sm) var(--space-md); font-size: 14px; margin-bottom: var(--space-sm); }

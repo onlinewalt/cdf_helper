@@ -29,7 +29,8 @@ D:\CDF_helper\
 │   ├── parser.py            # 来源文件解析（表头自动识别）
 │   ├── generator.py         # 模板填充 / 生成工作簿
 │   ├── ai.py                # AI 估算 + 本地缓存
-│   └── config.py            # API Key 配置读写
+│   └── config.py        # API Key / base URL / model 配置读写
+│   ├── tasks.py         # 后台任务 runner（submit/status），支撑 AI 实时进度 UI
 ├── uploads/                 # 上传的模板/来源文件（gitignore）
 ├── generated/               # 生成的报关清单（gitignore）
 ├── config.json              # 本地配置（API Key，gitignore）
@@ -152,6 +153,7 @@ class Part:
 - `GET /`：首页，列出服务器根目录可选的模板与来源文件，回填配置中的 API Key。
 - `POST /generate`：处理上传（`template_upload` / `sources_upload`，存入 `uploads/`）或服务器文件选择（`template_path` / `source_paths`）→ **模板布局预检**（`validate_template`，提前弹出错误提示，避免浪费解析/AI 时间）→ 解析 → 可选 AI → 生成到 `generated/` → 渲染 result 页。
 - `GET /download/<file>`：仅允许从 `generated/` 目录内下载（防目录穿越）。
+- `GET /status/<task_id>` / `GET /result/<task_id>`：AI 启用时，`/generate` 退为异步 — 后台线程（`tasks.submit`）运行 AI 估算 + 生成，`/status` 供前端轮询实时日志，完成后 `/result` 渲染清单结果页。`template_upload` 亦为表单字段（用于上传模板）。
 - 启动时清理 `uploads/`、`generated/` 中超过 7 天的旧文件（`_cleanup_old_files`）。
 - 表单字段：`vessel`（留空自动识别）、`port`、`date`、`include_spec`、`use_ai`、`api_key`、`api_url_base`、`model`、`save_key`。
 
