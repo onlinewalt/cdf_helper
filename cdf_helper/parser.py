@@ -572,6 +572,72 @@ def _parse_multiline_row(cells, mapping, path, warn) -> list:
     return parts
 
 
+def _header_multiline_data(sheet, mapping, header_row) -> bool:
+    """True when the *header* row's name cell holds the actual data.
+
+    In this variant (榆林湾26038；26041；26035；26032签单.xlsx Sheet1) the header
+    label sits on the first line of the name cell and one part name follows on
+    each subsequent line; the 数量/编号/单位 for those parts live one-per-row in
+    the rows that follow the header row. `_parse_standard` would read an empty
+    name column in every data row and yield 0 parts, so we detect the shape here
+    and route to `_parse_standard_multiline_header`.
+    """
+    lines = [l.strip() for l in _split_lines(sheet.cell(header_row, mapping["name"]).value) if l.strip()]
+    if len(lines) < 2:
+        return False
+    # Standard parsing needs at least one data row carrying a name value; if
+    # every data row's name column is empty, the names must live in the header.
+    for cells in sheet.iter_rows():
+        if cells[0].row <= header_row:
+            continue
+        if cells[mapping["name"] - 1].value is not None:
+            return False
+    return True
+
+
+def _parse_standard_multiline_header(sheet, mapping, header_row, path, warn) -> list:
+    """Parse the 'header cell holds data' variant of a standard Chinese sheet.
+
+    The header row's name (and optional type) cells hold their header label on
+    line 1 and one value per part on the following lines; each subsequent row
+    carries that part's 数量/单位/编号 columns (in order).
+    """
+    name_col, qty_col, type_col, unit_col, weight_col, price_col = _resolve_cols(mapping)
+
+    def _data_lines(col):
+        lines = _split_lines(sheet.cell(header_row, col).value)
+        return [l.strip() for l in lines[1:] if l.strip()]
+
+    name_lines = _data_lines(name_col)
+    if not name_lines:
+        return []
+    type_lines = _data_lines(type_col) if type_col and type_col != name_col else []
+
+    data_rows = [cells for cells in sheet.iter_rows() if cells[0].row > header_row]
+
+    parts = []
+    for idx, name in enumerate(name_lines):
+        cells = data_rows[idx] if idx < len(data_rows) else None
+        qty = _to_number(_cell_value(cells, qty_col)) if cells else None
+        if qty is None:
+            if warn:
+                warn(f"{path.name} 第 {header_row} 行第 {idx+1} 个备件缺少数量，按 1 处理: {name}")
+            qty = 1.0
+        unit = _to_text(_cell_value(cells, unit_col)) if cells and unit_col else None
+        part_type = type_lines[idx].strip() if idx < len(type_lines) else None
+        parts.append(
+            Part(
+                name=_clean(name),
+                qty=qty,
+                unit=unit or "个",
+                type=part_type or None,
+                weight=_to_number(_cell_value(cells, weight_col)) if cells and weight_col else None,
+                price=_to_number(_cell_value(cells, price_col)) if cells and price_col else None,
+            )
+        )
+    return parts
+
+
 def _parse_standard(sheet, mapping, header_row, path, warn) -> list:
     name_col, qty_col, type_col, unit_col, weight_col, price_col = _resolve_cols(mapping)
 
@@ -1028,6 +1094,8 @@ class ChineseHeaderLayout:
         header_row, mapping = _find_header_row(sheet)
         if _is_packed_format(mapping):
             return _parse_packed_sheet(sheet, mapping, header_row, path, warn)
+        if _header_multiline_data(sheet, mapping, header_row):
+            return _parse_standard_multiline_header(sheet, mapping, header_row, path, warn)
         return _parse_standard(sheet, mapping, header_row, path, warn)
 
 

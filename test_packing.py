@@ -502,12 +502,53 @@ def test_yuanshou_delivery_receipt_format():
     print("yuanshou delivery-receipt format test OK")
 
 
+def _write_header_multiline_data_workbook(path: Path):
+    """Sheet whose header row's 名称/型号规格 cells stack the data values on the
+    lines below the header label, while 数量/编号 live one-per-part in the
+    following rows. Mirrors 榆林湾26038；26041；26035；26032签单.xlsx Sheet1."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["C1"] = "中石化中海船舶燃料供应有限公司上海物资分公司"
+    ws["A2"] = "签收单C204MSA-26032-0000"
+    ws["A5"] = "序号"
+    ws["B5"] = "型号/规格\n液货系统舱内阀门液压系统\n液货系统舱内阀门液压系统\n液货系统舱内阀门液压系统"
+    ws["F5"] = "名称\n液压泵站进口滤芯\n液压泵站抗震压力表\nVALVE BLOCK"
+    ws["G5"] = "编号"
+    ws["H5"] = "单位"
+    ws["I5"] = "数量"
+    ws["K5"] = "备注"
+    ws["A6"] = 1; ws["G6"] = 5; ws["I6"] = 2
+    ws["A7"] = 2; ws["G7"] = 7; ws["I7"] = 2
+    ws["A8"] = 3; ws["G8"] = 9166582270; ws["I8"] = 3
+    wb.save(path)
+
+
+def test_header_multiline_data():
+    """Regression: a standard Chinese sheet whose header cell holds the actual
+    multi-line data (榆林湾...签单.xlsx Sheet1) must be parsed, not skipped."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "yulinwan.xlsx"
+        _write_header_multiline_data_workbook(path)
+        warns = []
+        parts = parse_source(path, warn=warns.append)
+
+        assert len(parts) == 3, [(p.name, p.qty, p.type) for p in parts]
+        assert parts[0].name == "液压泵站进口滤芯" and parts[0].qty == 2
+        assert parts[0].type == "液货系统舱内阀门液压系统", parts[0].type
+        assert parts[1].name == "液压泵站抗震压力表" and parts[1].qty == 2
+        assert parts[2].name == "VALVE BLOCK" and parts[2].qty == 3
+        assert all(p.type == "液货系统舱内阀门液压系统" for p in parts)
+    print("header-multiline-data variant test OK")
+
+
 if __name__ == "__main__":
     test_synthetic()
     test_end_of_listing_embedded_in_data()
     test_deshanghai_no_item_header_and_headerless()
     test_yuantong_ocr_header_and_merged_footer()
     test_yuanshou_delivery_receipt_format()
+    test_header_multiline_data()
     test_packed_synthetic()
     test_multiline_wrapped_header()
     test_bad_number_cell_xlsx_loads()
