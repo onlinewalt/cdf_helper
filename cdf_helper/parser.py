@@ -75,7 +75,8 @@ _CONTAINS_RULES = (
 # ---- packing-list (English Receipt/Packing List) patterns -------------
 _QTY_RE = re.compile(
     r"(?<!\d)(\d+(?:\.\d+)?)\s*"
-    r"(PCE|PCS|PC|SETS|SET|SHEET|PKT|MTR|PAIR|CASE|CAN|EA|BAG|ROLL|BIL)(?!\w)",
+    r"(PCE|PCS|PC|SETS|SET|SHEET|PKT|MTR|PAIR|CASE|CAN|EA|BAG|ROLL|BIL"
+    r"|只|个|件|套|台|支|根|张|块|盒|米|片)(?!\w)",
     re.IGNORECASE,
 )
 # Tolerant of OCR whitespace collapse, e.g. "End ofListing" (no space between
@@ -880,12 +881,16 @@ def _find_packing_header(sheet):
         # label. Yuantong receipts like 德胜海.xlsx label columns
         # 'Quantity(Unit) Particulars Part No' with NO Item column, so a
         # Particulars/Part No/Description label is accepted in place of Item.
+        # Delivery notes (时代20-青岛26-9-20.xlsx) may use "COMMODITY" or
+        # "SPECIFICATION" instead.
         label_found = (
             "item" in joined
             or any(_close_enough(t, _PACKING_TOKENS_ITEM) for t in tokens)
             or "particulars" in joined
             or "part no" in joined
             or "description" in joined
+            or "commodity" in joined
+            or "specification" in joined
         )
         if not label_found or not qty_found:
             continue
@@ -896,7 +901,7 @@ def _find_packing_header(sheet):
                 continue
             if any(k in t for k in ("item", "quantity", "particulars", "description")):
                 continue  # merged main header cell; not a metadata column
-            if "part no" in t or "serial no" in t or "dwg" in t:
+            if "part no" in t or "serial no" in t or "dwg" in t or "specification" in t:
                 exclude.add(c.column)
         return cells[0].row, exclude
     return None, set()
