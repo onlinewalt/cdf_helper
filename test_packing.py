@@ -618,6 +618,29 @@ def test_delivery_note_format():
     print("delivery-note format test OK")
 
 
+def test_expand_excluded_columns_whitebox():
+    """White-box: the col-offset correction is a standalone seam
+    (_expand_excluded_columns) testable in isolation, not only inferred from
+    the end-to-end Part list. Proves locality of the 时代20 column-offset fix."""
+    from cdf_helper.parser import WorkbookCache, _find_packing_header, _expand_excluded_columns
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "dn.xlsx"
+        _write_delivery_note_workbook(path)
+        with WorkbookCache() as cache:
+            sheet = cache.open(path).sheets[0]
+            # header locates "Part No" at col 7
+            header_row, seed = _find_packing_header(sheet)
+            assert header_row == 15 and 7 in seed, (header_row, seed)
+            # col-offset correction extends exclusion to col 6 (data sits one
+            # past the empty label column)
+            expanded = _expand_excluded_columns(sheet, header_row, seed)
+            assert 6 in expanded and 7 in expanded, expanded
+            # negation: a column that is NOT empty in the header is left alone
+            assert _expand_excluded_columns(sheet, header_row, {7}) == {6, 7}
+            assert _expand_excluded_columns(sheet, header_row, set()) == set()
+    print("expand_excluded_columns white-box test OK")
+
+
 
 if __name__ == "__main__":
     test_synthetic()
@@ -627,6 +650,7 @@ if __name__ == "__main__":
     test_yuanshou_delivery_receipt_format()
     test_header_multiline_data()
     test_delivery_note_format()
+    test_expand_excluded_columns_whitebox()
     test_packed_synthetic()
     test_multiline_wrapped_header()
     test_bad_number_cell_xlsx_loads()

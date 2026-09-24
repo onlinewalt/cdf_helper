@@ -963,28 +963,50 @@ def _find_packing_header(sheet):
                 continue  # merged main header cell; not a metadata column
             if "part no" in t or "serial no" in t or "dwg" in t or "specification" in t:
                 exclude.add(c.column)
-        # Column-offset correction: a merged column-header layout (a header
-        # cell holding "Item Quantity(Unit) Particulars") can sit the "Part
-        # No"/"Serial No" label one column past the real data column, leaving
-        # the label's column empty while the part-number data sits at col-1.
-        # When that gap column holds data in a later row, also exclude col-1 so
-        # part numbers aren't absorbed into name_parts. (E.g.
-        # 中远海运康乃馨-南沙26-9-24.xlsx: "Part No" label at col 7, data at col 6.)
-        for col in sorted(exclude):
-            prev = col - 1
-            if prev < 1 or prev in exclude:
-                continue
-            prev_empty_in_header = not sheet.cell(cells[0].row, prev).value
-            if not prev_empty_in_header:
-                continue
-            for row_cells in sheet.iter_rows():
-                if row_cells[0].row <= cells[0].row:
-                    continue
-                if row_cells[prev - 1].value is not None:
-                    exclude.add(prev)
-                    break
+        exclude = _expand_excluded_columns(sheet, cells[0].row, exclude)
         return cells[0].row, exclude
     return None, set()
+
+
+def _expand_excluded_columns(sheet, header_row, seed):
+    """Add metadata columns one position left of a labelled metadata column.
+
+    A merged column-header layout (a header cell holding e.g.
+    "Item Quantity(Unit) Particulars" in a single column) shifts the
+    "Part No"/"Serial No" label one column past the real data column: the
+    label's column is empty in the header row while the part-number data
+    sits at col-1 (e.g. 中远海运康乃馨-南沏26-9-24: "Part No" label at col 7,
+    data at col 6).
+
+    For every seed column whose col-1 is empty in the header row *and* holds
+    data in some later row, also return col-1 so part numbers aren't absorbed
+    into name_parts. Single pass over the sheet after header (O(rows)) instead
+    of an O(seed_cols x rows²) re-scan per excluded column.
+    """
+    cols = sorted(seed)
+    if not cols:
+        return seed
+    targets = []
+    for col in cols:
+        prev = col - 1
+        if prev < 1 or prev in seed:
+            continue
+        if sheet.cell(header_row, prev).value is not None:
+            continue
+        targets.append(prev)
+    if not targets:
+        return seed
+    targets = set(targets)
+    found = set()
+    for row_cells in sheet.iter_rows():
+        if row_cells[0].row <= header_row:
+            continue
+        if any(row_cells[prev - 1].value is not None for prev in targets):
+            found.add(prev)
+        targets -= found
+        if not targets:
+            break
+    return seed | found
 
 
 def _row_parts(cells, exclude_cols=()):
