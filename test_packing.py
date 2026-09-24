@@ -641,6 +641,64 @@ def test_expand_excluded_columns_whitebox():
     print("expand_excluded_columns white-box test OK")
 
 
+def test_qty_unit_matcher_whitebox():
+    """White-box: _QtyUnitMatcher is the single seam for qty/unit recognition.
+    Tests assert each role (extract / boolean / is_unit_word) in isolation
+    so a change to one concern can't silently alter the others (Candidate 2)."""
+    from cdf_helper.parser import _QM, _clean_name
+    # --- find_qty: extract (qty, unit, match) ---
+    q, u, m = _QM.find_qty("2 PCS")
+    assert q == 2.0 and u == "PCS" and m is not None
+    q, u, m = _QM.find_qty("12 只")
+    assert q == 12.0 and u == "只" and m is not None
+    assert _QM.find_qty("1.5 PCE")[0] == 1.5
+    assert _QM.find_qty("no number here") == (None, None, None)
+    # --- has_qty (boolean): the footer/end-of-listing role must NOT match
+    #   non-qty tokens the way the old unguarded _close_enough did.
+    assert _QM.has_qty("2 PCS") is True
+    assert _QM.has_qty("End of Listing") is False
+    assert _QM.has_qty("rt26029345") is False  # "rt"/"num"-substring is no match
+    assert _QM.has_qty("Order By") is False
+    # --- is_unit_word (membership): shared by _clean_name strip + pre-scan ---
+    assert _QM.is_unit_word("PCS") and _QM.is_unit_word("pcs")
+    assert _QM.is_unit_word("只") and _QM.is_unit_word("个")
+    assert _QM.is_unit_word("气阀") is False
+    # a unit word stripped from a name stays empty after _clean_name
+    assert _clean_name("12 只") == ""
+    assert _clean_name("PCS valve") == "valve"
+    print("qty_unit_matcher white-box test OK")
+
+
+def test_find_packing_header_whitebox():
+    """White-box: _find_packing_header returns (header_row, exclude_cols) at its
+    own interface — the exact predicate AGENTS.md tells operators to call
+    manually to diagnose a skipped sheet (Candidate 9)."""
+    from cdf_helper.parser import WorkbookCache, _find_packing_header
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "packing.xlsx"
+        _write_deshanghai_workbook(path)
+        with WorkbookCache() as cache:
+            sheet = cache.open(path).sheets[0]
+            header_row, exclude = _find_packing_header(sheet)
+            assert header_row is not None, "header must be found, not silently skipped"
+            assert header_row == 1, (header_row, exclude)
+        # a sheet with no packing header (only footer text) -> None, set()
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tf:
+            p2 = Path(tf.name)
+        wb2 = Workbook()
+        wb2.active["A1"] = "签收单"
+        wb2.active["A2"] = "** End of Listing **"
+        wb2.save(p2)
+        try:
+            with WorkbookCache() as cache2:
+                sheet2 = cache2.open(p2).sheets[0]
+                hr2, excl2 = _find_packing_header(sheet2)
+                assert hr2 is None and excl2 == set(), (hr2, excl2)
+        finally:
+            p2.unlink(missing_ok=True)
+    print("find_packing_header white-box test OK")
+
+
 
 if __name__ == "__main__":
     test_synthetic()
@@ -655,6 +713,8 @@ if __name__ == "__main__":
     test_multiline_wrapped_header()
     test_bad_number_cell_xlsx_loads()
     test_strict_workbook_cache_raises_on_bad_number_cell()
+    test_qty_unit_matcher_whitebox()
+    test_find_packing_header_whitebox()
     test_vessel_lookup()
     test_packed_real_file_if_present()
     test_real_file_if_present()
