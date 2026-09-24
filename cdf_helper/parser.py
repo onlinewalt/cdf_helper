@@ -72,15 +72,74 @@ _CONTAINS_RULES = (
     ("价格", "price"),
 )
 
+class _QtyUnitMatcher:
+    """Single source of truth for "what counts as a quantity/unit".
+
+    A `parse_source` caller previously reached into two module-level globals —
+    `_QTY_RE` (a compiled regex) and `_UNIT_WORDS` (a frozenset) — that were
+    mutated together by commit `6eddf7b` to add Chinese units. The two globals
+    are *not* the same concern: `_QTY_RE` extracts a qty+unit from text, while
+    `_UNIT_WORDS` is also used to *strip* unit tokens out of names. Sharing one
+    representation means a change to serve one role (recognise "2 只" as qty)
+    silently alters the other (refuse to strip "只" from names) and, worse,
+    leaks into the two boolean callers `_find_end_of_listing` /
+    `_parse_packing_headerless` (a footer "End of Listing 3 个" is then
+    misread as qty-bearing data).
+
+    This Module concentrates all three roles behind an Interface small enough
+    to be the test surface: ``find_qty`` (extract), ``has_qty`` (boolean),
+    ``is_unit_word`` (membership). The deletion test now deletes the matcher,
+    not the globals: complexity of regex-shape + unit-set + tokenisation
+    collapses to one place instead of spreading across four call sites.
+    """
+
+    _ENGLISH_UNITS = (
+        "PCE", "PCS", "PC", "SETS", "SET", "SHEET", "PKT", "MTR", "PAIR",
+        "CASE", "CAN", "EA", "BAG", "ROLL", "BIL",
+    )
+    # Chinese units are single characters; ``(?!\w)`` keeps them from matching
+    # inside CJK runs because CJK chars are not ``\w``.
+    _CHINESE_UNITS = ("只", "个", "件", "套", "台", "支", "根", "张",
+                      "块", "盒", "米", "片")
+
+    def __init__(self) -> None:
+        alts = "|".join([*self._ENGLISH_UNITS, *self._CHINESE_UNITS])
+        self._qty_re = re.compile(
+            r"(?<!\d)(\d+(?:\.\d+)?)\s*(" + alts + r")(?!\w)",
+            re.IGNORECASE,
+        )
+        self._unit_words = frozenset(
+            w.upper() for w in [*self._ENGLISH_UNITS, *self._CHINESE_UNITS]
+        )
+
+    def find_qty(self, text):
+        """Return (qty, unit, match_obj) for the first qty+unit in *text*, else (None, None, None).
+
+        Callers that slice around the match (e.g. removing it from a name) use
+        ``match_obj``; boolean callers use :meth:`has_qty`.
+        """
+        if not text:
+            return None, None, None
+        m = self._qty_re.search(text)
+        if not m:
+            return None, None, None
+        return float(m.group(1)), m.group(2), m
+
+    def has_qty(self, text) -> bool:
+        """True if *text* contains a qty+unit token (footer/end-of-listing check)."""
+        return bool(text and self.find_qty(text)[2])
+
+    def is_unit_word(self, text) -> bool:
+        """True if *text* is a bare unit word to strip from names."""
+        if not text:
+            return False
+        return text.upper() in self._unit_words
+
+
+_QM = _QtyUnitMatcher()
+
+
 # ---- packing-list (English Receipt/Packing List) patterns -------------
-_QTY_RE = re.compile(
-    r"(?<!\d)(\d+(?:\.\d+)?)\s*"
-    r"(PCE|PCS|PC|SETS|SET|SHEET|PKT|MTR|PAIR|CASE|CAN|EA|BAG|ROLL|BIL"
-    r"|只|个|件|套|台|支|根|张|块|盒|米|片)(?!\w)",
-    re.IGNORECASE,
-)
-# Tolerant of OCR whitespace collapse, e.g. "End ofListing" (no space between
-# "of" and "Listing") or the fully merged "endoflisting".
 _END_RE = re.compile(r"end\s*of\s*listing", re.IGNORECASE)
 
 # Detects a line starting with a sequence number or checkbox+number (multi-part format)
@@ -96,14 +155,6 @@ _IRRELEVANT_RE = re.compile(
     re.IGNORECASE,
 )
 
-_UNIT_WORDS = frozenset(
-    w.upper()
-    for w in (
-        "PCE", "PCS", "PC", "SET", "SETS", "SHEET", "PKT", "MTR", "PAIR",
-        "CASE", "CAN", "EA", "BAG", "ROLL", "个", "件", "套", "台", "支",
-        "根", "张", "块", "盒", "米", "只", "片",
-    )
-)
 
 _FOOTER_KEYWORDS = (
     "signature",
@@ -163,7 +214,7 @@ def _clean_name(text: str) -> str:
             continue
         if re.fullmatch(r"[=\-*]+", t):
             continue
-        if t.upper() in _UNIT_WORDS:
+        if _QM.is_unit_word(t):
             continue
         tokens.append(t)
     return " ".join(tokens).strip(" -–—")
@@ -956,7 +1007,7 @@ def _row_parts(cells, exclude_cols=()):
             break
         if nxt is not None:
             nxt_text = _clean(nxt.value)
-            if nxt_text and nxt_text.upper() in _UNIT_WORDS:
+            if nxt_text and _QM.is_unit_word(nxt_text):
                 if qty is None:
                     qty = float(val)
                     unit = nxt_text
@@ -973,12 +1024,12 @@ def _row_parts(cells, exclude_cols=()):
             type_parts.append(type_part)
         if not base:
             continue
-        m = _QTY_RE.search(base)
-        if m:
+        m = _QM.find_qty(base)
+        if m[2]:  # match object present
             if qty is None:
-                qty = float(m.group(1))
-                unit = m.group(2)
-            rest = base[: m.start()] + base[m.end():]
+                qty = m[0]
+                unit = m[1]
+            rest = base[: m[2].start()] + base[m[2].end():]
             rest = _clean_name(rest)
             if rest and not _is_irrelevant(rest):
                 name_parts.append(rest)
@@ -1004,7 +1055,7 @@ def _find_end_of_listing(rows, start_idx, last_row) -> int:
     for idx in range(start_idx, last_row + 1):
         text = _row_text(rows[idx - 1])
         if _END_RE.search(text):
-            if _QTY_RE.search(text):
+            if _QM.has_qty(text):
                 continue
             return idx
     return last_row + 1
@@ -1065,7 +1116,7 @@ def _parse_packing_headerless(sheet, path, warn) -> list:
 
     start = None
     for idx in range(1, end):
-        if _QTY_RE.search(_row_text(rows[idx - 1])):
+        if _QM.has_qty(_row_text(rows[idx - 1])):
             start = idx
             break
     if start is None:
@@ -1204,10 +1255,6 @@ def parse_source(path, warn=None, cache=None) -> list:
                 if layout.recognizes(sheet):
                     parts.extend(layout.parse_sheet(sheet, path, warn))
                     break
-
-    if not parts:
-        raise ValueError(f"在 {path.name} 中没有解析到备件数据")
-    return parts
 
     if not parts:
         raise ValueError(f"在 {path.name} 中没有解析到备件数据")
