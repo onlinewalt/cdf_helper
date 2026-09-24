@@ -15,6 +15,7 @@ from cdf_helper import config as app_config
 from cdf_helper import tasks
 from cdf_helper.ai import enrich_parts
 from cdf_helper.generator import generate, sanitize_filename, validate_template
+from cdf_helper.jobs import JobResult
 from cdf_helper.parser import (
     WorkbookCache,
     parse_sources,
@@ -205,17 +206,8 @@ def do_generate():
     if out_path.exists():
         out_path = GENERATED_DIR / f"{out_path.stem}-{uuid.uuid4().hex[:6]}{out_path.suffix}"
 
-    def _finish(ai_stats_, warnings_):
-        return render_template(
-            "result.html",
-            file_name=out_path.name,
-            vessel=vessel,
-            port=port,
-            date=date,
-            item_count=len(parts),
-            warnings=warnings_,
-            ai_stats=ai_stats_,
-        )
+    def _finish(result: JobResult):
+        return render_template("result.html", **result.to_template_dict())
 
     if use_ai:
         ai_cfg = app_config.get_ai_config()
@@ -257,15 +249,15 @@ def do_generate():
                 output_name=out_path.name,
                 include_spec=include_spec,
             )
-            return {
-                "file_name": out_path.name,
-                "vessel": vessel,
-                "port": port,
-                "date": date,
-                "item_count": len(parts),
-                "warnings": warnings_,
-                "ai_stats": stats,
-            }
+            return JobResult(
+                file_name=out_path.name,
+                vessel=vessel,
+                port=port,
+                date=date,
+                item_count=len(parts),
+                warnings=warnings_,
+                ai_stats=stats,
+            )
 
         tid = tasks.submit(_worker)
         return render_template(
@@ -289,7 +281,17 @@ def do_generate():
         flash(f"生成失败：{e}", "error")
         return redirect(url_for("index"))
 
-    return _finish(ai_stats, warnings)
+    return _finish(
+        JobResult(
+            file_name=out_path.name,
+            vessel=vessel,
+            port=port,
+            date=date,
+            item_count=len(parts),
+            warnings=warnings,
+            ai_stats=ai_stats,
+        )
+    )
 
 
 @app.route("/download/<path:file_name>")
@@ -322,16 +324,19 @@ def result(task_id):
     if t["status"] != "done":
         return redirect(url_for("index"))
     r = t["result"]
-    return render_template(
-        "result.html",
-        file_name=r["file_name"],
-        vessel=r["vessel"],
-        port=r["port"],
-        date=r["date"],
-        item_count=r["item_count"],
-        warnings=r["warnings"],
-        ai_stats=r["ai_stats"],
-    )
+    # The background worker returns a typed JobResult; render through its
+    # single Template-dict seam so result.html never depends on field names
+    # duplicated across the AI closure and the sync path.
+    ctx = r.to_template_dict() if isinstance(r, JobResult) else {
+        "file_name": r.get("file_name"),
+        "vessel": r.get("vessel"),
+        "port": r.get("port"),
+        "date": r.get("date"),
+        "item_count": r.get("item_count"),
+        "warnings": r.get("warnings"),
+        "ai_stats": r.get("ai_stats"),
+    }
+    return render_template("result.html", **ctx)
 
 
 if __name__ == "__main__":

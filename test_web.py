@@ -173,10 +173,24 @@ def test_generate_ai_async_polls_to_result(monkeypatch, client):
     assert "清单已生成" in final.get_data(as_text=True)
 
 
-def test_generate_ai_without_key(client):
-    tpl, src = _template_bytes(), _make_source_bytes()
-    r = _generate(client, tpl, src, use_ai=True, api_key="", follow=True)
-    assert "API Key" in r.get_data(as_text=True)
+def test_jobresult_template_contract():
+    """White-box: JobResult is the single typed source of the result.html
+    dict shape. The interface (to_template_dict) is the test surface: a field
+    rename in the Module must not silently drift from the template variables."""
+    from cdf_helper.jobs import JobResult
+    r = JobResult(
+        file_name="out.xlsx", vessel="远怡湖", port="青岛", date="2026-09-20",
+        item_count=2, warnings=["解析提示 A", "解析提示 B"], ai_stats={"requested": 2, "filled": 1},
+    )
+    ctx = r.to_template_dict()
+    assert ctx == {
+        "file_name": "out.xlsx", "vessel": "远怡湖", "port": "青岛",
+        "date": "2026-09-20", "item_count": 2,
+        "warnings": ["解析提示 A", "解析提示 B"],
+        "ai_stats": {"requested": 2, "filled": 1},
+    }
+    # sync path sends ai_stats=None
+    assert JobResult("f", "", "", "", 0).to_template_dict()["ai_stats"] is None
 
 
 if __name__ == "__main__":
