@@ -27,6 +27,36 @@ EXPECTED_TOTAL_ROW = FIRST_DATA_ROW + TEMPLATE_DATA_CAPACITY  # 7
 # Columns O/P (15/16) in the blank template carry stray "套"/2 leftovers.
 LEFTOVER_COLS = (15, 16)
 
+# Output column indices (1-based) the generator writes to.
+SEQ_COL, NAME_COL, QTY_COL, UNIT_COL, WEIGHT_COL, PRICE_COL, AMOUNT_COL = 1, 2, 3, 4, 5, 6, 7
+
+
+def seq_num_formula(row) -> str:
+    """序号 auto-increment: ``=ROW()-2``.
+
+    Anchored to FIRST_DATA_ROW (row 3 -> 1, row 4 -> 2, ...). Centralised as a
+    seam so a shift in the data-start row updates both the seq column and the
+    SUM anchor in one place (the old inline literal `=ROW()-2` was duplicated
+    and would silently drift if FIRST_DATA_ROW changed).
+    """
+    return "=ROW()-{}".format(FIRST_DATA_ROW - 1)
+
+
+def amount_formula(row) -> str:
+    """金额: ``=C<row>*F<row>`` (数量 * 单价), relative to the part's row."""
+    return f"=C{row}*F{row}"
+
+
+def sum_formula(col_letter) -> str:
+    """合计: ``=SUM(<col>$3:INDEX(<col>:<col>,ROW()-1))``.
+
+    Sums the data column from row 3 up to the row above the total row. The
+    ``$3`` anchor and ``ROW()-1`` upper bound are the template's layout
+    assumptions, made explicit here so they're testable rather than buried
+    inline in ``generate``.
+    """
+    return f"=SUM({col_letter}$3:INDEX({col_letter}:{col_letter},ROW()-1))"
+
 
 def _copy_style(src_cell, dst_cell):
     dst_cell._style = copy.copy(src_cell._style)
@@ -128,6 +158,32 @@ def validate_template(template_path, sheet_name=TEMPLATE_SHEET):
     return None
 
 
+def _write_part_row(ws, row, part, data_styles, include_spec):
+    """Write one part's row (序号/name/qty/unit/weight/price/amount) and style it."""
+    ws.cell(row, SEQ_COL).value = seq_num_formula(row)
+    ws.cell(row, NAME_COL).value = _display_name(part, include_spec)
+    ws.cell(row, QTY_COL).value = part.qty
+    ws.cell(row, UNIT_COL).value = part.unit
+    ws.cell(row, WEIGHT_COL).value = part.weight
+    ws.cell(row, PRICE_COL).value = part.price
+    ws.cell(row, AMOUNT_COL).value = amount_formula(row)
+    _apply_styles(ws, row, data_styles)
+    ws.row_dimensions[row].height = 20
+
+
+def _write_total_row(ws, row, total_styles):
+    """Write the '合计' total row: marker in col A, SUM formula in C/E/G."""
+    ws.cell(row, 1).value = TOTAL_MARKER
+    ws.cell(row, 2).value = None
+    ws.cell(row, QTY_COL).value = sum_formula("C")
+    ws.cell(row, 4).value = None
+    ws.cell(row, WEIGHT_COL).value = sum_formula("E")
+    ws.cell(row, PRICE_COL).value = None
+    ws.cell(row, AMOUNT_COL).value = sum_formula("G")
+    _apply_styles(ws, row, total_styles)
+    ws.row_dimensions[row].height = 20
+
+
 def generate(template_path, parts, vessel_name, output_dir, output_name,
              include_spec=True, sheet_name=TEMPLATE_SHEET):
     """Fill the template with parts and save to output_dir/output_name.
@@ -163,26 +219,9 @@ def generate(template_path, parts, vessel_name, output_dir, output_name,
 
     for i, part in enumerate(parts):
         r = FIRST_DATA_ROW + i
-        ws.cell(r, 1).value = "=ROW()-2"
-        ws.cell(r, 2).value = _display_name(part, include_spec)
-        ws.cell(r, 3).value = part.qty
-        ws.cell(r, 4).value = part.unit
-        ws.cell(r, 5).value = part.weight
-        ws.cell(r, 6).value = part.price
-        ws.cell(r, 7).value = f"=C{r}*F{r}"
-        _apply_styles(ws, r, data_styles)
-        ws.row_dimensions[r].height = 20
+        _write_part_row(ws, r, part, data_styles, include_spec)
 
-    # Total row
-    ws.cell(total_row, 1).value = "合计"
-    ws.cell(total_row, 2).value = None
-    ws.cell(total_row, 3).value = "=SUM(C$3:INDEX(C:C,ROW()-1))"
-    ws.cell(total_row, 4).value = None
-    ws.cell(total_row, 5).value = "=SUM(E$3:INDEX(E:E,ROW()-1))"
-    ws.cell(total_row, 6).value = None
-    ws.cell(total_row, 7).value = "=SUM(G$3:INDEX(G:G,ROW()-1))"
-    _apply_styles(ws, total_row, total_styles)
-    ws.row_dimensions[total_row].height = 20
+    _write_total_row(ws, total_row, total_styles)
 
     # Tidy up template leftovers outside the table (row 7 cols O/P)
     for col in LEFTOVER_COLS:
