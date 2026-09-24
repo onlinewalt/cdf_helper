@@ -542,6 +542,49 @@ def test_header_multiline_data():
     print("header-multiline-data variant test OK")
 
 
+def _write_delivery_note_workbook(path: Path):
+    """Delivery note (中远海运康乃馨-南沙26-9-24.xlsx) with English packing headers
+    merged into column 1 ('Item Quantity(Unit) Particulars'), the Part No label
+    off by one (col 7 but data at col 6), and qty/unit in SEPARATE adjacent cells."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "Page 1 of 1"
+    ws["A3"] = "Machinery  Dept."
+    ws["A6"] = "Msg  No            : XXXXXXZK FA"
+    ws["A15"] = "Item        Quantity(Unit)          Particulars"
+    ws["G15"] = "Part  No"
+    ws["A16"] = "(01)"
+    ws["B16"] = ("Equipment     : Methanol Gas Leak Detection Cabinet\n"
+                 "Type                  : FMC2000GDS\n"
+                 "Cus  Ref no .   : D8FESA-26048-0000")
+    ws["F16"] = "Serial  No .     : C2312042"
+    ws["A17"] = 1; ws["B17"] = 2; ws["C17"] = "PCS"; ws["D17"] = "SENSEPOINT XCD (氧气浓度传感器仓)"; ws["F17"] = "SPXCDXS01SS"
+    ws["A18"] = 2; ws["B18"] = 2; ws["C18"] = "PCS"; ws["D18"] = "SENSEPOINT XCD (甲醇浓度传感器仓)"; ws["F18"] = "SPXCDXSRXSS"
+    ws["A19"] = "    **  End of Listing **\nSignature and Chop  :"
+    wb.save(path)
+
+
+def test_delivery_note_format():
+    """Regression: delivery notes whose qty/unit sit in separate adjacent cells
+    and whose Part No column is off-by-one must still parse (时代20-南沙26-9-24)."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "delivery_note.xlsx"
+        _write_delivery_note_workbook(path)
+        warns = []
+        parts = parse_source(path, warn=warns.append)
+
+        assert len(parts) == 2, [(p.name, p.qty, p.unit) for p in parts]
+        assert parts[0].name == "SENSEPOINT XCD (氧气浓度传感器仓)", parts[0].name
+        assert parts[0].qty == 2 and parts[0].unit == "PCS", parts[0]
+        assert parts[1].name == "SENSEPOINT XCD (甲醇浓度传感器仓)", parts[1].name
+        assert parts[1].qty == 2 and parts[1].unit == "PCS", parts[1]
+        # Part No must be excluded from the name (off-by-one column handling)
+        assert all("SPXCD" not in p.name for p in parts), [p.name for p in parts]
+    print("delivery-note format test OK")
+
+
+
 if __name__ == "__main__":
     test_synthetic()
     test_end_of_listing_embedded_in_data()
@@ -549,6 +592,7 @@ if __name__ == "__main__":
     test_yuantong_ocr_header_and_merged_footer()
     test_yuanshou_delivery_receipt_format()
     test_header_multiline_data()
+    test_delivery_note_format()
     test_packed_synthetic()
     test_multiline_wrapped_header()
     test_bad_number_cell_xlsx_loads()

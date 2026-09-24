@@ -875,7 +875,9 @@ def _find_packing_header(sheet):
             or "num" in joined            # covers a count column labelled "Num"
             # OCR can corrupt "Quantity" into near-misses like "Qantily"; the
             # edit distance to "quantity" is 2, so accept close alphabetic tokens.
-            or any(_close_enough(t, ("quantity", "qty")) for t in tokens)
+            # Require len>=3 so 2-char tokens (e.g. "rt" in a RI# like RT26…,
+            # "by" in "Order By") can't false-match "qty" at distance 2.
+            or any(len(t) >= 3 and _close_enough(t, ("quantity", "qty")) for t in tokens)
         )
         # A packing header carries a Quantity-like label with an Item-like
         # label. Yuantong receipts like 德胜海.xlsx label columns
@@ -903,6 +905,26 @@ def _find_packing_header(sheet):
                 continue  # merged main header cell; not a metadata column
             if "part no" in t or "serial no" in t or "dwg" in t or "specification" in t:
                 exclude.add(c.column)
+        # Column-offset correction: a merged column-header layout (a header
+        # cell holding "Item Quantity(Unit) Particulars") can sit the "Part
+        # No"/"Serial No" label one column past the real data column, leaving
+        # the label's column empty while the part-number data sits at col-1.
+        # When that gap column holds data in a later row, also exclude col-1 so
+        # part numbers aren't absorbed into name_parts. (E.g.
+        # 中远海运康乃馨-南沙26-9-24.xlsx: "Part No" label at col 7, data at col 6.)
+        for col in sorted(exclude):
+            prev = col - 1
+            if prev < 1 or prev in exclude:
+                continue
+            prev_empty_in_header = not sheet.cell(cells[0].row, prev).value
+            if not prev_empty_in_header:
+                continue
+            for row_cells in sheet.iter_rows():
+                if row_cells[0].row <= cells[0].row:
+                    continue
+                if row_cells[prev - 1].value is not None:
+                    exclude.add(prev)
+                    break
         return cells[0].row, exclude
     return None, set()
 
@@ -911,8 +933,37 @@ def _row_parts(cells, exclude_cols=()):
     """Extract (qty, unit, name_parts, type_parts) from one row of cells."""
     qty, unit = None, None
     name_parts, type_parts = [], []
+
+    # Some delivery-note layouts (e.g. 中远海运康乃馨-南沙26-9-24.xlsx) split the
+    # quantity and the unit word across *adjacent* cells (qty# in one column,
+    # unit word in the next), unlike the typical Yuantong "2  PCS" single cell.
+    # Pre-scan: a pure-numeric cell whose next non-empty/non-excluded cell is a
+    # unit word is treated as the quantity; both cells are then skipped below so
+    # they never leak into name_parts. A numeric Item-seq column (1,2,3...) is
+    # never mistaken for qty because its following cell is not a unit word.
+    skip_cols = set()
+    for i, cell in enumerate(cells):
+        if cell.column in exclude_cols or cell.value is None:
+            continue
+        val = _clean(cell.value)
+        if not val or not re.fullmatch(r"-?\d+(?:\.\d+)?", val):
+            continue
+        nxt = None
+        for c2 in cells[i + 1 :]:
+            if c2.column in exclude_cols or c2.value is None:
+                continue
+            nxt = c2
+            break
+        if nxt is not None:
+            nxt_text = _clean(nxt.value)
+            if nxt_text and nxt_text.upper() in _UNIT_WORDS:
+                if qty is None:
+                    qty = float(val)
+                    unit = nxt_text
+                    skip_cols.add(cell.column)
+                    skip_cols.add(nxt.column)
     for cell in cells:
-        if cell.column in exclude_cols:
+        if cell.column in exclude_cols or cell.column in skip_cols:
             continue
         text = _clean(cell.value)
         if not text:
