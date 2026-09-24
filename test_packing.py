@@ -618,6 +618,49 @@ def test_delivery_note_format():
     print("delivery-note format test OK")
 
 
+def test_chinese_schema_dispatch_whitebox():
+    """White-box: _dispatch_chinese_schema is the single seam choosing packed vs
+    standard vs multiline-header-data for Chinese sheets (Candidate 6). Asserts
+    the right interpreter is reached for each shape, not just the end result."""
+    import tempfile
+    from cdf_helper.parser import (
+        WorkbookCache, _find_header_row, _is_packed_format,
+        _header_multiline_data, _dispatch_chinese_schema,
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        # standard multi-column Chinese sheet
+        std = Path(td) / "std.xlsx"
+        wb = Workbook(); ws = wb.active
+        ws["A1"] = "签收单"
+        ws["A3"] = "序号"; ws["B3"] = "名称"; ws["D3"] = "数量"
+        ws["A4"] = 1; ws["B4"] = "阀门"; ws["D4"] = 2
+        wb.save(std)
+
+        # packed single-column Chinese sheet
+        packed = Path(td) / "packed.xlsx"
+        wb2 = Workbook(); ws2 = wb2.active
+        ws2["A3"] = "序号  名称  编号  单位  数量  备注"
+        ws2["A4"] = "1  阀门  88-01  个  2"
+        wb2.save(packed)
+
+        for label, path, packed_flag, multiline_flag in [
+            ("standard", std, False, False),
+            ("packed", packed, True, False),
+        ]:
+            with WorkbookCache() as cache:
+                sheet = cache.open(path).sheets[0]
+                hr, mapping = _find_header_row(sheet)
+                assert hr is not None, f"{label}: no chinese header"
+                # the predicates agree with the expected shape
+                assert _is_packed_format(mapping) is packed_flag, (label, mapping)
+                assert _header_multiline_data(sheet, mapping, hr) is multiline_flag, (label, hr, mapping)
+                # dispatch yields parts for both shapes
+                parts = _dispatch_chinese_schema(sheet, mapping, hr, Path(path.name), lambda m: None)
+                assert len(parts) >= 1, (label, parts)
+    print("chinese schema dispatch white-box test OK")
+
+
 def test_expand_excluded_columns_whitebox():
     """White-box: the col-offset correction is a standalone seam
     (_expand_excluded_columns) testable in isolation, not only inferred from
@@ -708,6 +751,7 @@ if __name__ == "__main__":
     test_yuanshou_delivery_receipt_format()
     test_header_multiline_data()
     test_delivery_note_format()
+    test_chinese_schema_dispatch_whitebox()
     test_expand_excluded_columns_whitebox()
     test_packed_synthetic()
     test_multiline_wrapped_header()

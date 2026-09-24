@@ -1218,7 +1218,11 @@ class SheetLayout(Protocol):
 class ChineseHeaderLayout:
     """Chinese receipt / material list: a header row carrying 名称 + 数量.
 
-    Claims both packed single-column sheets and standard multi-column sheets.
+    Claims packed single-column sheets, "header cell holds stacked data"
+    sheets, and standard multi-column sheets — discriminated by
+    :func:`_dispatch_chinese_schema`, which is the single seam owning that
+    3-way choice (so editing one shape = editing one place, not re-branching
+    in parse_sheet).
     """
 
     def recognizes(self, sheet: SpreadsheetSheet) -> bool:
@@ -1228,11 +1232,23 @@ class ChineseHeaderLayout:
 
     def parse_sheet(self, sheet: SpreadsheetSheet, path, warn) -> list:
         header_row, mapping = _find_header_row(sheet)
-        if _is_packed_format(mapping):
-            return _parse_packed_sheet(sheet, mapping, header_row, path, warn)
-        if _header_multiline_data(sheet, mapping, header_row):
-            return _parse_standard_multiline_header(sheet, mapping, header_row, path, warn)
-        return _parse_standard(sheet, mapping, header_row, path, warn)
+        return _dispatch_chinese_schema(sheet, mapping, header_row, path, warn)
+
+
+def _dispatch_chinese_schema(sheet, mapping, header_row, path, warn) -> list:
+    """Route a recognized Chinese-header sheet to the right row interpreter.
+
+    This is the *one* place that decides packed vs. multiline-header-data vs.
+    standard for Chinese sheets — the seam Candidate 6 identifies as the
+    real dispatch surface (the deletion test: inling this into parse_source
+    would not reduce complexity; collapsing it to one named function lets
+    each branch be tested directly).
+    """
+    if _is_packed_format(mapping):
+        return _parse_packed_sheet(sheet, mapping, header_row, path, warn)
+    if _header_multiline_data(sheet, mapping, header_row):
+        return _parse_standard_multiline_header(sheet, mapping, header_row, path, warn)
+    return _parse_standard(sheet, mapping, header_row, path, warn)
 
 
 class EnglishPackingLayout:
