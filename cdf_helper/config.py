@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+from typing import TypedDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.json"
@@ -13,6 +14,21 @@ ENV_MODEL = "AI_MODEL"
 
 DEFAULT_API_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-chat"
+
+
+class AiConfig(TypedDict):
+    """Typed shape of the AI configuration (the config Module's Interface).
+
+    Callers in webapp.py / main.py / ai.py previously hand-indexed a bare
+    dict returned by get_ai_config(); a key rename broke them with no static
+    signal (mypy --strict passed because the return type was ``dict``). This
+    TypedDict localizes the contract here and keeps the existing ``cfg["x"]``
+    access syntax working, gaining static field checking at the seam.
+    """
+
+    api_key: str
+    api_url: str
+    model: str
 
 
 def load_config() -> dict:
@@ -40,7 +56,7 @@ def get_api_key() -> str:
     return load_config().get("api_key", "").strip()
 
 
-def get_ai_config() -> dict:
+def get_ai_config() -> AiConfig:
     """返回生效的 AI 配置，合并自环境变量与 config.json。
 
     Keys: api_key, api_url（不含 /chat/completions 的基础地址）, model。
@@ -49,8 +65,8 @@ def get_ai_config() -> dict:
     cfg = load_config()
     api_url = os.environ.get(ENV_API_URL, "").strip() or cfg.get("api_url", "").strip()
     model = os.environ.get(ENV_MODEL, "").strip() or cfg.get("model", "").strip()
-    return {
-        "api_key": get_api_key(),
-        "api_url": api_url or DEFAULT_API_URL,
-        "model": model or DEFAULT_MODEL,
-    }
+    return AiConfig(
+        api_key=get_api_key(),
+        api_url=api_url or DEFAULT_API_URL,
+        model=model or DEFAULT_MODEL,
+    )

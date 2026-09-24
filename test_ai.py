@@ -78,9 +78,8 @@ def test_custom_url_and_model_used():
 
 def test_enrich_parts_defaults_from_config(monkeypatch):
     import cdf_helper.ai as ai_mod
-    from cdf_helper import config
 
-    monkeypatch.setattr(config, "get_ai_config", lambda: {
+    monkeypatch.setattr(ai_mod, "get_ai_config", lambda: {
         "api_key": "sk-env", "api_url": "https://api.example.com/v2", "model": "custom-model",
     })
     captured = {}

@@ -14,7 +14,7 @@ import urllib.request
 
 from pathlib import Path
 
-from cdf_helper.config import DEFAULT_API_URL, DEFAULT_MODEL
+from cdf_helper.config import DEFAULT_API_URL, DEFAULT_MODEL, get_ai_config
 
 BATCH_SIZE = 50
 CACHE_PATH = Path(__file__).resolve().parent.parent / "ai_cache.json"
@@ -238,8 +238,6 @@ class AIProvider:
 def enrich_parts(parts, api_key, cache_path=CACHE_PATH, on_status=None, api_url=None, model=None) -> dict:
     """便捷入口：创建 provider 并 enrich。api_url/model 缺省时读 config/env（见 config.get_ai_config）。"""
     if api_url is None or model is None:
-        from cdf_helper.config import get_ai_config
-
         cfg = get_ai_config()
         api_url = api_url or cfg["api_url"]
         model = model or cfg["model"]
