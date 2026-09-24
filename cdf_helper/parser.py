@@ -18,7 +18,7 @@ Both .xlsx (openpyxl) and legacy .xls (xlrd) files are supported.
 import re
 import unicodedata
 from collections import OrderedDict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
@@ -293,13 +293,13 @@ class SpreadsheetSheet(Protocol):
 class _OpenpyxlSpreadsheetSheet:
     """Adapter over an openpyxl worksheet.
 
-    Constructing one triggers the process-wide lenient-cast patch (see
-    :func:`cache_openpyxl_lenient`) so a stray non-numeric value in a
-    number-typed cell degrades to a string instead of aborting the load.
+    Construction is pure: it does not mutate the openpyxl runtime. The lenient
+    number-cast behavior lives in :class:`WorkbookCache` (the Adapter that owns
+    workbook loading), not here, so that a cache can be constructed without
+    side-effecting the entire openpyxl module.
     """
 
     def __init__(self, ws):
-        cache_openpyxl_lenient()
         self._ws = ws
 
     @property
@@ -358,25 +358,24 @@ class Workbook:
         self.sheets = sheets
 
 
-# Process-level guard: the lenient-cast patch is applied once per interpreter
-# session, not per call. (See ``cache_openpyxl_lenient``.)
-_OPENPYX_LENIENT_PATCHED = False
+@contextmanager
+def _lenient_openpyxl_cast():
+    """Context manager that makes openpyxl degrade a non-numeric value in a
+    number-typed cell (e.g. a stray '.') to a string instead of raising
+    ``ValueError: could not convert string to float`` during load, which
+    aborts the whole workbook.
 
-
-def cache_openpyxl_lenient() -> None:
-    """Patch openpyxl's number caster so a non-numeric value stored in a
-    number-typed cell (e.g. a stray '.') degrades to a string instead of
-    raising ``ValueError: could not convert string to float`` during load,
-    which aborts the whole workbook.
-
-    Idempotent: valid numeric cells still cast to float(), so only cells that
-    previously raised (e.g. a stray ".") are affected. Folded into the openpyxl
-    adapter's construction so there is no separate pre-load call site or
-    module-global toggle to manage.
+    This is a *scoped* patch of openpyxl's private ``_cast_number``: the
+    original is restored on exit, so it never leaks to unrelated openpyxl
+    usage outside the context. It is invoked only from
+    :meth:`WorkbookCache._load` — the Adapter that owns workbook loading —
+    not from sheet construction, so a cache can be built without mutating
+    the openpyxl module globally. A caller wanting strict behavior can opt
+    out via ``WorkbookCache(lenient=False)``.
     """
-    global _OPENPYX_LENIENT_PATCHED
-    if _OPENPYX_LENIENT_PATCHED:
-        return
+    import openpyxl.worksheet._reader as _reader
+
+    original = getattr(_reader, "_cast_number", None)
 
     def _cast_number(value: str) -> object:
         try:
@@ -385,12 +384,12 @@ def cache_openpyxl_lenient() -> None:
             return value
 
     try:
-        import openpyxl.worksheet._reader as _reader
         if hasattr(_reader, "_cast_number"):
             _reader._cast_number = _cast_number
-    except Exception:
-        pass
-    _OPENPYX_LENIENT_PATCHED = True
+        yield
+    finally:
+        if original is not None:
+            _reader._cast_number = original
 
 
 class WorkbookCache:
@@ -401,10 +400,16 @@ class WorkbookCache:
     lookup + a handful of source files); a long-running Flask server never
     hoards stale workbooks, and tests can inject an empty cache for hermetic
     behaviour.
+
+    ``lenient`` controls the openpyxl-only adapter: when True (the default),
+    non-numeric values in number-typed cells degrade to strings instead of
+    aborting the whole workbook load. Set to False to get a strict adapter
+    for tests that assert on load failures.
     """
 
-    def __init__(self, max_entries: int = 8):
+    def __init__(self, max_entries: int = 8, lenient: bool = True):
         self.max_entries = max_entries
+        self.lenient = lenient
         self._order: "OrderedDict[str, Workbook]" = OrderedDict()
 
     def open(self, path) -> Workbook:
@@ -427,11 +432,13 @@ class WorkbookCache:
             book = xlrd.open_workbook(str(path))
             sheets = [_XlrdSpreadsheetSheet(s) for s in book.sheets()]
         else:
-            # The lenient-cast patch is applied in the adapter ctor; call it
-            # once here too so the very first sheet construction is safe.
-            cache_openpyxl_lenient()
-            book = load_workbook(path, data_only=True)
-            sheets = [_OpenpyxlSpreadsheetSheet(ws) for ws in book.worksheets]
+            # The lenient-cast patch is scoped to this load only, so it can't
+            # leak to unrelated openpyxl usage (unlike the old process-global
+            # patch). Skip it when a strict adapter was requested.
+            cm = _lenient_openpyxl_cast() if self.lenient else nullcontext()
+            with cm:
+                book = load_workbook(path, data_only=True)
+                sheets = [_OpenpyxlSpreadsheetSheet(ws) for ws in book.worksheets]
         return Workbook(sheets=sheets)
 
     def clear(self) -> None:

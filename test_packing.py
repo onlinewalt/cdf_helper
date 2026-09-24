@@ -1,8 +1,11 @@
-"""Tests for the packing-list (English Receipt/Packing List) parser, incl. a
+"""
+Tests for the packing-list (English Receipt/Packing List) parser, incl. a
 best-effort check against the real uploaded file when present."""
+import gc
 import sys
 import tempfile
 import zipfile
+from contextlib import suppress
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -348,6 +351,37 @@ def test_bad_number_cell_xlsx_loads():
     print("bad number cell xlsx test OK")
 
 
+def test_strict_workbook_cache_raises_on_bad_number_cell():
+    """Two adapters justify the WorkbookCache(lenient=) seam: lenient=True
+    (default) degrades the stray '.' to a string and loads; lenient=False
+    (strict) re-raises a ValueError. The adapter must be substitutable,
+    not process-globally mutated."""
+    from cdf_helper.parser import WorkbookCache
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "badnum.xlsx"
+        _write_xlsx_with_bad_number_cell(path)
+        # strict adapter: the bad cell aborts the load like upstream openpyxl.
+        try:
+            with WorkbookCache(lenient=False) as cache:
+                cache.open(path)
+            strict_loaded = True
+        except ValueError:
+            strict_loaded = False
+        assert not strict_loaded, "strict WorkbookCache should raise on a bad number cell"
+        # Windows/openpyxl leaves a ZipFile handle on the failed load; force
+        # GC so it is released before lenient reload + TemporaryDirectory cleanup.
+        gc.collect()
+        # lenient adapter (default): loads cleanly and parses parts.
+        parts = parse_source(path)
+        assert len(parts) == 2, [(p.name, p.qty) for p in parts]
+        # Windows/openpyxl may linger a ZipFile handle on a *failed* load;
+        # remove the file explicitly so TemporaryDirectory teardown doesn't
+        # raise PermissionError (the handle is released by GC shortly after).
+        with suppress(PermissionError):
+            path.unlink()
+    print("strict vs lenient WorkbookCache seam test OK")
+
+
 def _write_deshanghai_workbook(path: Path):
     """德胜海-style Yuantong receipt: two sheets with NO 'Item' column.
 
@@ -596,6 +630,7 @@ if __name__ == "__main__":
     test_packed_synthetic()
     test_multiline_wrapped_header()
     test_bad_number_cell_xlsx_loads()
+    test_strict_workbook_cache_raises_on_bad_number_cell()
     test_vessel_lookup()
     test_packed_real_file_if_present()
     test_real_file_if_present()
