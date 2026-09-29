@@ -433,6 +433,54 @@ def test_deshanghai_no_item_header_and_headerless():
     print("deshanghai no-item + headerless test OK")
 
 
+def _write_xinlsg_workbook(path: Path):
+    """新洛杉矶-外高桥 style: a packing list whose entire receipt body (header +
+    qty + part + spec + End-of-Listing footer) is crammed into ONE cell at the
+    data row, prefixed by document-field labels and a leading 'Type:暂无 ...'
+    whose 'Type:' match parks the real qty line in the type_part."""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "Msg  No : EXXXXXXZK FA"
+    ws["A2"] = "Receipt / Packing List"
+    ws["A4"] = "Item        Quantity(Unit)"
+    ws["B4"] = "Particulars"
+    ws["C4"] = "Part  No"
+    # single merged-cell data row: leading 'Type:暂无' (no value) + field labels
+    # + the real line '1 3 PCE BALL BEARING φ40*52*7,100CR6 (W. NO. 1. 3505) ROL
+    # XLAN00038400 Type:392-0063 ** End of Listing **'
+    ws["A6"] = (
+        "Equipment : Valve Remote Control System Type : 暂无 "
+        "Serial  No .   : Cus  Ref no .   : E534MSA-26034-0000 "
+        "1            3  PCE                            BALL  BEARING φ40*52*7,100CR6 "
+        "（W. NO . 1. 3505）   ROL           XLAN00038400\n"
+        "Type:392-0063 ** End of Listing **"
+    )
+    ws["A10"] = "** End of Listing **"
+    wb.save(path)
+
+
+def test_merged_cell_blob_layout_recovers_part_name():
+    """Regression for 新洛杉矶-外高桥26-9-29.xlsx: packing list body crammed into
+    one cell prefixed by a 'Type:暂无' label and document-field junk. The real
+    qty (3 PCE) + part name must be recovered, not dropped to 0 parts."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "xinlsg.xlsx"
+        _write_xinlsg_workbook(path)
+        warns = []
+        parts = parse_source(path, warn=warns.append)
+        assert len(parts) == 1, parts
+        p = parts[0]
+        assert p.qty == 3 and p.unit == "PCE", p
+        assert "BALL BEARING" in p.name and "BALL" in p.name, p.name
+        assert "Serial" not in p.name and "Cus Ref" not in p.name, p.name
+        assert p.type == "392-0063", p.type
+        assert "End of Listing" not in (p.type or ""), p.type
+        assert not warns, warns
+    print("merged-cell-blob layout recovery test OK")
+
+
 def _write_yuantong_ocr_workbook(path: Path):
     """远棠湾-加单.xlsx Sheet6 layout: Yuantong receipt whose qty header is OCR-corrupted
     to 'Qantily' (dist 2 from 'Quantity') and whose footer is merged as
@@ -747,6 +795,7 @@ if __name__ == "__main__":
     test_synthetic()
     test_end_of_listing_embedded_in_data()
     test_deshanghai_no_item_header_and_headerless()
+    test_merged_cell_blob_layout_recovers_part_name()
     test_yuantong_ocr_header_and_merged_footer()
     test_yuanshou_delivery_receipt_format()
     test_header_multiline_data()
