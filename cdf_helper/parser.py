@@ -163,6 +163,7 @@ _FOOTER_KEYWORDS = (
     "issued by",
     "date 日期",
     "htt",
+    "end of listing",
 )
 
 
@@ -175,8 +176,51 @@ def _trim_footer(text: str) -> str:
         if i != -1:
             idx = min(idx, i)
     if idx < len(text):
-        text = text[:idx].strip(" -–—")
+        text = text[:idx]
+    # drop trailing punctuation/whitespace that survives the keyword cut
+    # (e.g. the '** ' markers around 'End of Listing')
+    text = text.rstrip(" *※★\t-–—").rstrip()
     return text
+
+
+# Leading document-field labels (Serial No, Cus Ref no, ...) that may appear at
+# the start of a merged-cell name blob before the real part name. Used by the
+# merged-cell-blob recovery path in _row_parts. Matched as whole multi-word
+# phrases so "Serial No" consumes both tokens (not just "Serial").
+_LEADING_FIELD_LABELS = (
+    re.compile(r"^(?:暂无|暂)\s*", re.IGNORECASE),
+    re.compile(r"^Serial\s*No\s*", re.IGNORECASE),
+    re.compile(r"^Cus\s*Ref\s*(?:no)?\s*:?\s*", re.IGNORECASE),
+    re.compile(r"^Msg\s*No\s*", re.IGNORECASE),
+    re.compile(r"^Order\s*Date\s*", re.IGNORECASE),
+    re.compile(r"^Issue\s*Date\s*", re.IGNORECASE),
+    re.compile(r"^Shipment\s*#\s*", re.IGNORECASE),
+    re.compile(r"^Date\s*", re.IGNORECASE),
+    re.compile(r"^Issued\s*By\s*", re.IGNORECASE),
+    re.compile(r"^Machine\s*Dept\s*", re.IGNORECASE),
+    re.compile(r"^Receipt\s*/\s*Packing\s*List\s*", re.IGNORECASE),
+    re.compile(r"^Page\s*of\s*\d+\s*", re.IGNORECASE),
+)
+
+
+def _strip_leading_field_labels(text: str) -> str:
+    """Drop a leading run of recognized document-field labels from a name blob
+    (used by the merged-cell-blob recovery path in _row_parts). Stops at the
+    first token that is not a known leading label — the real part name begins
+    there. Only strips known document-field phrases (Serial No, Cus Ref no, ...);
+    ordinary part words like 'BALL' are never touched."""
+    out = text.strip()
+    prev = None
+    while prev != out:
+        prev = out
+        for pat in _LEADING_FIELD_LABELS:
+            new = pat.sub("", out, count=1).strip(" -–—")
+            if new != out:
+                out = new
+                break
+        else:
+            break
+    return out
 
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -1063,6 +1107,36 @@ def _row_parts(cells, exclude_cols=()):
             if rest and not _is_irrelevant(rest):
                 name_parts.append(rest)
             continue
+        # base had no quantity of its own, but a merged-cell blob can park the
+        # qty + part name in the "Type:..." tail that _split_type carved off
+        # (e.g. 新洣和洛杉矶-外高桥26-9-29.xlsx row 12: "(01) Equipment...
+        # Type:暂无 ... 1 3 PCE BALL BEARING ... Type:392-0063 ** End of Listing **").
+        # Recover qty from the most recent type_part, then anchor the part name
+        # on the *tail of the qty match* (everything after "3 PCE") up to the
+        # next Type: spec — that substring is reliably the part name, while the
+        # leading document-field labels ("Serial No ... Cus Ref no ...") are
+        # dropped as metadata junk.
+        if qty is None and type_parts:
+            mt = _QM.find_qty(type_parts[-1])
+            if mt[2]:
+                qty = mt[0]
+                unit = mt[1]
+                after_qty = type_parts[-1][mt[2].end():]
+                # part name = text after the qty up to the next "Type:spec" footer
+                before, tail = _split_type(after_qty)
+                name_seg = _trim_footer(before) if before else _trim_footer(after_qty)
+                name_seg = _clean_name(_strip_leading_field_labels(_clean(name_seg)))
+                if name_seg and not _is_irrelevant(name_seg):
+                    name_parts.append(name_seg)
+                if tail:
+                    type_parts[-1] = _trim_footer(tail)
+                else:
+                    # nothing meaningful after the qty: keep the blob's pre-qty
+                    # label tokens (Serial No value etc.) as type metadata
+                    type_parts[-1] = _trim_footer(type_parts[-1][: mt[2].start()])
+            # if no qty in type_part, leave type_parts intact (it may be a
+            # legit "Type:8298.28.2517" spec or a continuation value) and fall
+            # through to the base/name handling below.
         if _is_irrelevant(base):
             continue
         name_parts.append(_clean_name(base))
