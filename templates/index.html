@@ -101,6 +101,15 @@
                                 开启 AI 估算缺失的重量 / 单价
                             </label>
                             <div class="field" id="ai_key_field" style="display:none;margin-top:var(--space-sm);">
+                                {% if ai_profiles|length > 1 %}
+                                <label for="ai_profile" style="margin-bottom:var(--space-xs);">切换 AI 提供者：</label>
+                                <select id="ai_profile" name="ai_profile" style="margin-bottom:var(--space-sm);">
+                                    <option value=""> — 默认 ({{ default_profile }}) — </option>
+                                    {% for prof in ai_profiles %}
+                                    <option value="{{ prof }}">{{ prof }}</option>
+                                    {% endfor %}
+                                </select>
+                                {% endif %}
                                 <label for="api_key">AI API Key：</label>
                                 <input type="password" id="api_key" name="api_key" value="{{ api_key_prefill }}"
                                        placeholder="sk-...（留空则读取环境变量 AI_API_KEY）">
@@ -113,8 +122,14 @@
                             </div>
                             <label class="check-line" id="save_key_line" style="display:none;">
                                 <input type="checkbox" name="save_key" checked>
-                                将 API Key 保存到本地 config.json（下次免填）
+                                保存当前配置到本地 config.json
                             </label>
+                            <div id="save_profile_line" class="field" style="display:none;">
+                                <input type="text" name="save_profile_name" placeholder="配置名称（如 deepseek / openai），留空存为默认">
+                                <label class="check-line" style="margin-top:var(--space-xs);">
+                                    <input type="checkbox" name="save_profile_default"> 设为默认提供者
+                                </label>
+                            </div>
                         </div>
                     </details>
                 </section>
@@ -132,12 +147,30 @@
         const useAi = document.getElementById('use_ai');
         const keyField = document.getElementById('ai_key_field');
         const saveLine = document.getElementById('save_key_line');
+        const saveProfileLine = document.getElementById('save_profile_line');
+        // profile switch: only url/model are embedded (api_key is NEVER sent to
+        // the client for stored profiles; the user re-enters it or relies on the
+        // AI_API_KEY env var). The default profile's values are server-rendered.
+        const profileCfgs = {{ ai_profile_cfgs | tojson | safe }};
+        const profileSelect = document.getElementById('ai_profile');
         function toggleAi() {
             const on = useAi.checked;
             keyField.style.display = on ? '' : 'none';
             saveLine.style.display = on ? '' : 'none';
+            saveProfileLine.style.display = on ? '' : 'none';
         }
         useAi.addEventListener('change', toggleAi);
+        if (profileSelect) {
+            profileSelect.addEventListener('change', function () {
+                const prof = this.value;
+                const cfg = prof ? profileCfgs[prof] : null;
+                if (cfg) {
+                    document.getElementById('api_url_base').value = cfg.api_url || '';
+                    document.getElementById('model').value = cfg.model || '';
+                    document.getElementById('api_key').value = ''; // never reuse a stored key client-side
+                }
+            });
+        }
         toggleAi();
     </script>
 </body>

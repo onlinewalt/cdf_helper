@@ -78,7 +78,6 @@ def test_custom_url_and_model_used():
 
 def test_enrich_parts_defaults_from_config(monkeypatch):
     import cdf_helper.ai as ai_mod
-
     monkeypatch.setattr(ai_mod, "get_ai_config", lambda: {
         "api_key": "sk-env", "api_url": "https://api.example.com/v2", "model": "custom-model",
     })
@@ -97,6 +96,33 @@ def test_enrich_parts_defaults_from_config(monkeypatch):
     enrich_parts(parts=[Part(name="A", qty=1)], api_key="sk-env")
     assert captured["api_url"] == "https://api.example.com/v2", captured
     assert captured["model"] == "custom-model", captured
+
+
+def test_profile_switching(monkeypatch, tmp_path):
+    """Users can save multiple named AI provider profiles and switch between
+    them; env vars still take precedence over any profile."""
+    import cdf_helper.config as config
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "config.json")
+    config.save_profile("deepseek", "sk-dk", "https://api.deepseek.com", "deepseek-chat", default=True)
+    config.save_profile("openai", "sk-oai", "https://api.openai.com/v1", "gpt-4o-mini")
+    assert set(config.get_profiles()) >= {"deepseek", "openai"}, config.get_profiles()
+    # default profile is deepseek
+    dk = config.get_ai_config()
+    assert dk["api_url"] == "https://api.deepseek.com" and dk["model"] == "deepseek-chat", dk
+    # explicit profile lookup
+    oa = config.get_ai_config("openai")
+    assert oa["api_url"] == "https://api.openai.com/v1" and oa["model"] == "gpt-4o-mini", oa
+    assert config.get_api_key("openai") == "sk-oai"
+    # env var wins over profile
+    monkeypatch.setenv("AI_API_URL", "https://env-vip.example.com/v1")
+    env_cfg = config.get_ai_config("openai")
+    assert env_cfg["api_url"] == "https://env-vip.example.com/v1", env_cfg
+    monkeypatch.delenv("AI_API_URL")
+    # legacy top-level keys still parse as the _last profile for backward compat
+    config.save_config({"api_key": "sk-legacy", "api_url": "https://legacy.example.com", "model": "legacy-x"})
+    assert "_last" in config.get_profiles()
+    legacy = config.get_ai_config("_last")
+    assert legacy["api_key"] == "sk-legacy" and legacy["api_url"] == "https://legacy.example.com", legacy
 
 
 def test_json_fenced_response():

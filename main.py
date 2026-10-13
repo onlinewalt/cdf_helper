@@ -55,6 +55,7 @@ def _parse_args(argv):
     g.add_argument("--api-key", default=None, help="AI API Key（默认读环境变量 AI_API_KEY 或 config.json）")
     g.add_argument("--api-url", default=None, help="OpenAI 兼容 API 基础地址，如 https://api.openai.com/v1（默认 deepseek）")
     g.add_argument("--model", default=None, help="模型名，如 deepseek-chat / gpt-4o-mini（默认 deepseek-chat）")
+    g.add_argument("--ai-profile", default=None, help="从 config.json 读取命名的 AI 提供者配置（优先于 --api-key/--api-url/--model）")
     return p.parse_args(argv)
 
 
@@ -223,11 +224,11 @@ def main(argv=None):
     if args.ai:
         from cdf_helper.ai import enrich_parts
 
-        api_key = args.api_key or app_config.get_api_key()
+        api_key = args.api_key or app_config.get_api_key(args.ai_profile)
         if not api_key:
-            print("错误：使用 --ai 需要提供 API Key（--api-key 或环境变量 AI_API_KEY）。")
+            print("错误：使用 --ai 需要提供 API Key（--api-key、--ai-profile 或环境变量 AI_API_KEY）。")
             return 1
-        ai_cfg = app_config.get_ai_config()
+        ai_cfg = app_config.get_ai_config(args.ai_profile)
         api_url = args.api_url or ai_cfg["api_url"]
         model = args.model or ai_cfg["model"]
         print(f"正在用 {model} 估算缺失的重量/单价 ...")

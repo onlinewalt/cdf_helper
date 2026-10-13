@@ -125,6 +125,12 @@ def index():
         api_key_prefill=ai_cfg["api_key"],
         api_url_prefill=ai_cfg["api_url"],
         model_prefill=ai_cfg["model"],
+        ai_profiles=app_config.get_profiles(),
+        default_profile=(app_config.load_config().get("default_profile") or "_last"),
+        ai_profile_cfgs={
+            p: {"api_url": c["api_url"], "model": c["model"]}
+            for p, c in (app_config.load_config().get("profiles", {})).items()
+        },
     )
 
 
@@ -210,19 +216,15 @@ def do_generate():
         return render_template("result.html", **result.to_template_dict())
 
     if use_ai:
-        ai_cfg = app_config.get_ai_config()
+        profile = request.form.get("ai_profile", "").strip() or None
+        ai_cfg = app_config.get_ai_config(profile) if profile else app_config.get_ai_config()
         api_key = request.form.get("api_key", "").strip() or ai_cfg["api_key"]
         api_url = request.form.get("api_url_base", "").strip() or ai_cfg["api_url"]
         model = request.form.get("model", "").strip() or ai_cfg["model"]
         if request.form.get("save_key") == "on" and (api_key or api_url or model):
-            save = {}
-            if api_key:
-                save["api_key"] = api_key
-            if api_url:
-                save["api_url"] = api_url
-            if model:
-                save["model"] = model
-            app_config.save_config(save)
+            prof_name = request.form.get("save_profile_name", "").strip()
+            make_default = request.form.get("save_profile_default") == "on"
+            app_config.save_profile(prof_name, api_key, api_url, model, default=make_default)
         if not api_key:
             flash("已勾选 AI 智能填写，但未提供 API Key（或未设置环境变量 AI_API_KEY）。", "error")
             return redirect(url_for("index"))
