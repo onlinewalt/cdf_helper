@@ -790,6 +790,10 @@ def _parse_standard(sheet, mapping, header_row, path, warn) -> list:
 # ---- packed single-column format parsing --------------------------------
 
 _PACKED_QTY_RE = re.compile(r'^[\d.]+$')
+# A line that is a bare quantity with no unit (the unit sits in the next column).
+# Used to recognise vertical-merge qty columns (e.g. '10\n10\n10\n10') and to
+# discriminate them from descriptive single-cell blobs whose lines aren't numeric.
+_STACK_QTY_LINE_RE = re.compile(r'^-?\d+(?:\.\d+)?$')
 _CODE_PATTERN = re.compile(r'[\u00d7/]|dwg|code|drg', re.IGNORECASE)
 
 
@@ -1148,6 +1152,86 @@ def _row_text(cells) -> str:
     return " ".join(_clean(c.value) for c in cells if c.value is not None)
 
 
+def _expand_multiline_rows(rows, header_idx, end_idx, exclude_cols):
+    """Normalize vertical-merge (stacked) packing rows into one-Row-per-item.
+
+    Some Yuantong/DELM receipt workbooks (e.g. 中远高雄-天津26-10-13.xlsx) write
+    several data rows into a *single* cell per column, newline-separated:
+    col1='1\\n2\\n3\\n4' (Item#), col2='10\\n10\\n10\\n10' (Qty),
+    col3='PCE\\nPCE\\nPCE\\nPCE' (Unit), col4='YRING\\nO-RING\\nORING'.
+
+    The downstream _row_parts/_collect_packing_items assume one logical row
+    per worksheet row and silently drop these (find_qty sees '10 10 10 10'.
+    not '10 PCE'), yielding 0 parts with no warning. Splitting each
+    newline-bearing cell into parallel logical rows restores the row-per-item
+    shape every other path already handles.
+
+    Only rows strictly between the header and the End-of-Listing footer that
+    carry a newline in *any* data cell are expanded; plain rows pass through
+    untouched. Returns a new list.
+
+    Discriminator from the single-cell 'Type:' blob layout (e.g.
+    新洣和洛杉矶-外高桥, whose whole receipt body is one cell): that cell's lines
+    are NOT individually numeric, so it is left for the Type-blob recovery path
+    in _row_parts. Here we only expand rows whose multi-line cells are
+    individually qty-bearing (e.g. col '10\\n10\\n10\\n10') — the vertical-merge
+    signature.
+    """
+    expanded = []
+    for idx in range(1, len(rows) + 1):
+        cells = rows[idx - 1]
+        # find data cells whose lines are *individually* numeric (qty column
+        # of a vertical-merge stack). Blob/merge cells hold descriptive text
+        # whose lines are not numeric, so they are skipped here.
+        qty_like_cols = {}
+        any_multiline = False
+        for c in cells:
+            if c.column in exclude_cols or c.value is None:
+                continue
+            val = str(c.value)
+            lines = val.split("\n")
+            if len(lines) > 1:
+                any_multiline = True
+                numeric_lines = [
+                    ln for ln in lines
+                    if ln.strip()
+                    and _STACK_QTY_LINE_RE.fullmatch(ln.strip())
+                ]
+                if len(numeric_lines) > 1:
+                    qty_like_cols[c.column] = [ln for ln in (l.strip() for l in lines) if ln]
+        # expand only when a column is a genuine vertical-merge qty column
+        # (≥2 standalone-numeric lines) — this is the stack signature and
+        # excludes the descriptive single-cell blob.
+        if qty_like_cols and any_multiline and header_idx < idx <= end_idx:
+            split_cols = dict(qty_like_cols)
+            # pull non-numeric multi-line cells (unit/name columns) to align
+            for c in cells:
+                if c.column in exclude_cols or c.column in split_cols or c.value is None:
+                    continue
+                lines = str(c.value).split("\n")
+                if len(lines) > 1:
+                    split_cols[c.column] = [ln.strip() for ln in lines if ln.strip() != ""] or [""]
+            # anchor the row count on the qty-like (numeric) column: it is the
+            # reliable per-item spine, so a name column with an extra comment
+            # line (e.g. the Chinese '烦请确认...' note) overflows and is merged
+            # into the preceding item by _collect_packing_items' continuation
+            # logic instead of fabricating a phantom qty-less row.
+            ncols = max(len(v) for v in qty_like_cols.values())
+            all_cols = {c.column: c for c in cells}
+            for r in range(ncols):
+                new_cells = []
+                for col in sorted(all_cols):
+                    orig = all_cols[col]
+                    if col in split_cols and r < len(split_cols[col]):
+                        new_cells.append(Cell(split_cols[col][r], col, orig.row))
+                    else:
+                        new_cells.append(Cell(None, col, orig.row))
+                expanded.append(new_cells)
+        else:
+            expanded.append(cells)
+    return expanded
+
+
 def _find_end_of_listing(rows, start_idx, last_row) -> int:
     """Find the '**End of Listing**' footer row (1-based).
 
@@ -1241,7 +1325,13 @@ def _parse_packing_sheet(sheet, path, warn) -> list:
 
     rows = list(sheet.iter_rows())
     end = _find_end_of_listing(rows, header_row, sheet.last_row)
-    return _collect_packing_items(rows, header_row, end, exclude_cols, path, sheet.name, warn)
+    # Some packing lists stack several data rows into one cell per column
+    # (newline-separated, e.g. 中远高雄-天津26-10-13.xlsx); normalize those into
+    # one logical row per item, then recompute the End-of-Listing bound against
+    # the expanded row list so footer indexing stays correct.
+    expanded = _expand_multiline_rows(rows, header_row, end, exclude_cols)
+    end = _find_end_of_listing(expanded, header_row, len(expanded)) if len(expanded) != len(rows) else end
+    return _collect_packing_items(expanded, header_row, end, exclude_cols, path, sheet.name, warn)
 
 
 # ---- number / text helpers --------------------------------------------

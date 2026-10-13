@@ -481,6 +481,47 @@ def test_merged_cell_blob_layout_recovers_part_name():
     print("merged-cell-blob layout recovery test OK")
 
 
+def _write_stacked_qty_workbook(path: Path):
+    """中远高雄-天津 style: packing list whose data columns are vertical-merge
+    stacks — qty/unit/name cells each hold NEWLINE-separated values (one logical
+    row per line). Columns: A=Item seq, B=Qty, C=Unit, D=Particulars, F=Part No.
+    Without row-splitting, find_qty sees '10 10 10 10' (not '10 PCE') and the
+    sheet yields 0 parts."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "Page 1 of 1"
+    ws["E1"] = "29 Sep, 2026"
+    ws["A6"] = "Receipt / Packing List"
+    ws["A15"] = "Item        Quantity(Unit)          Particulars"
+    ws["F15"] = "Part  No"
+    ws["A17"] = "1\n2\n3\n4"
+    ws["B17"] = "10\n10\n10\n10"
+    ws["C17"] = "PCE\nPCE\nPCE\nPCE"
+    ws["D17"] = "YRING\nO-RING\nO-RING\nO-RING"
+    ws["A20"] = "**  End of Listing **"
+    wb.save(path)
+
+
+def test_vertical_merge_qty_stack_yields_parts():
+    """Regression for 中远高雄-天津26-10-13.xlsx: newline-stacked qty/unit/name
+    columns (vertical merge) must be split into one logical row per item, else
+    find_qty sees '10 10 10 10' and the sheet yields 0 parts."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "stacked.xlsx"
+        _write_stacked_qty_workbook(path)
+        warns = []
+        parts = parse_source(path, warn=warns.append)
+        assert len(parts) == 4, [(p.name, p.qty, p.unit) for p in parts]
+        for p in parts:
+            assert p.qty == 10 and p.unit == "PCE", p
+        names = [p.name for p in parts]
+        assert "YRING" in names and "O-RING" in names, names
+        assert "End of Listing" not in " ".join(names), names
+        assert not warns, warns
+    print("vertical-merge qty-stack recovery test OK")
+
+
 def _write_yuantong_ocr_workbook(path: Path):
     """远棠湾-加单.xlsx Sheet6 layout: Yuantong receipt whose qty header is OCR-corrupted
     to 'Qantily' (dist 2 from 'Quantity') and whose footer is merged as
@@ -796,6 +837,7 @@ if __name__ == "__main__":
     test_end_of_listing_embedded_in_data()
     test_deshanghai_no_item_header_and_headerless()
     test_merged_cell_blob_layout_recovers_part_name()
+    test_vertical_merge_qty_stack_yields_parts()
     test_yuantong_ocr_header_and_merged_footer()
     test_yuanshou_delivery_receipt_format()
     test_header_multiline_data()
