@@ -1083,19 +1083,62 @@ def _expand_excluded_columns(sheet, header_row, seed):
     return seed | found
 
 
-def _row_parts(cells, exclude_cols=()):
-    """Extract (qty, unit, name_parts, type_parts) from one row of cells."""
+@dataclass
+class RowParts:
+    """Interpreted fields of one worksheet row for packing-list parsing.
+
+    Returned by `interpret_row`. All per-CELL cleanup (quantity detection,
+    Type: splitting via _split_type, _clean_name, _strip_leading_field_labels,
+    _is_irrelevant filtering) is done inside interpret_row so the messy
+    recovery rules live in ONE place (locality): callers never re-implement
+    qty-from-adjacent-cell or "drop leading field labels" logic.
+
+    The joined name/type strings are NOT assembled here — `_collect_packing_items`
+    has row-merge policies (seq-only spill vs. kit-label vs. Type-blob recovery
+    vs. continuation-merge) that need to extend/override tokens, so the policy
+    calls `.assembled()` once it has decided. `assembled()` is the seam that
+    dedupes + joins + trims the (already-cleaned) tokens.
+    """
+    qty: Optional[float]
+    unit: Optional[str]
+    name_tokens: list
+    type_tokens: list
+
+    def assembled(self):
+        """Dedupe/join/trim the cleaned tokens into final (name, type) strings.
+        Returns (name_or_None, type_or_None)."""
+        name = _clean_name(" ".join(_dedupe(self.name_tokens))).strip(" -–—") if self.name_tokens else None
+        type_str = _clean_name(" ".join(_dedupe(self.type_tokens))).strip(" -–—") if self.type_tokens else None
+        name = _trim_footer(name) if name else None
+        type_str = _trim_footer(type_str) if type_str else None
+        return name, type_str
+
+
+def interpret_row(cells, exclude_cols=()):
+    """Read ONE worksheet row into a RowParts value (pure row reader).
+
+    Detects qty (incl. the adjacent-cell qty+unit split used by some
+    delivery-note layouts), splits each cell on "Type:" via _split_type, and
+    cleans name/type tokens via _clean_name/_strip_leading_field_labels/
+    _is_irrelevant. Returns cleaned token LISTS (not a joined string) so the
+    caller's row-merge policies can extend/override — assembly happens later
+    via RowParts.assembled().
+
+    NO qty-less recovery is done here — a row with no qty returns
+    RowParts(qty=None, name_tokens=[], type_tokens=[...]) for the caller's
+    policy (`_recover_qtyless`, `_seq_only_row`, `_KIT_LABEL_RE`) to handle.
+    """
     qty, unit = None, None
     name_parts, type_parts = [], []
+    skip_cols = set()
 
     # Some delivery-note layouts (e.g. 中远海运康乃馨-南沙26-9-24.xlsx) split the
-    # quantity and the unit word across *adjacent* cells (qty# in one column,
-    # unit word in the next), unlike the typical Yuantong "2  PCS" single cell.
+    # quantity and the unit word across *adjacent* cells (qty in one column,
+    # unit word in the next), unlike the typical Yuantong "2  PCE" single cell.
     # Pre-scan: a pure-numeric cell whose next non-empty/non-excluded cell is a
     # unit word is treated as the quantity; both cells are then skipped below so
     # they never leak into name_parts. A numeric Item-seq column (1,2,3...) is
     # never mistaken for qty because its following cell is not a unit word.
-    skip_cols = set()
     for i, cell in enumerate(cells):
         if cell.column in exclude_cols or cell.value is None:
             continue
@@ -1103,7 +1146,7 @@ def _row_parts(cells, exclude_cols=()):
         if not val or not re.fullmatch(r"-?\d+(?:\.\d+)?", val):
             continue
         nxt = None
-        for c2 in cells[i + 1 :]:
+        for c2 in cells[i + 1:]:
             if c2.column in exclude_cols or c2.value is None:
                 continue
             nxt = c2
@@ -1137,40 +1180,57 @@ def _row_parts(cells, exclude_cols=()):
             if rest and not _is_irrelevant(rest):
                 name_parts.append(rest)
             continue
-        # base had no quantity of its own, but a merged-cell blob can park the
-        # qty + part name in the "Type:..." tail that _split_type carved off
-        # (e.g. 新洣和洛杉矶-外高桥26-9-29.xlsx row 12: "(01) Equipment...
-        # Type:暂无 ... 1 3 PCE BALL BEARING ... Type:392-0063 ** End of Listing **").
-        # Recover qty from the most recent type_part, then anchor the part name
-        # on the *tail of the qty match* (everything after "3 PCE") up to the
-        # next Type: spec — that substring is reliably the part name, while the
-        # leading document-field labels ("Serial No ... Cus Ref no ...") are
-        # dropped as metadata junk.
-        if qty is None and type_parts:
-            mt = _QM.find_qty(type_parts[-1])
-            if mt[2]:
-                qty = mt[0]
-                unit = mt[1]
-                after_qty = type_parts[-1][mt[2].end():]
-                # part name = text after the qty up to the next "Type:spec" footer
-                before, tail = _split_type(after_qty)
-                name_seg = _trim_footer(before) if before else _trim_footer(after_qty)
-                name_seg = _clean_name(_strip_leading_field_labels(_clean(name_seg)))
-                if name_seg and not _is_irrelevant(name_seg):
-                    name_parts.append(name_seg)
-                if tail:
-                    type_parts[-1] = _trim_footer(tail)
-                else:
-                    # nothing meaningful after the qty: keep the blob's pre-qty
-                    # label tokens (Serial No value etc.) as type metadata
-                    type_parts[-1] = _trim_footer(type_parts[-1][: mt[2].start()])
-            # if no qty in type_part, leave type_parts intact (it may be a
-            # legit "Type:8298.28.2517" spec or a continuation value) and fall
-            # through to the base/name handling below.
         if _is_irrelevant(base):
             continue
         name_parts.append(_clean_name(base))
-    return qty, unit, name_parts, type_parts
+
+    return RowParts(qty=qty, unit=unit, name_tokens=name_parts,
+                    type_tokens=type_parts)
+
+
+def _recover_qtyless(rp: RowParts) -> RowParts:
+    """Per-row policy: a qty-less row whose type_tokens hide a qty+name blob
+    (merged-cell artifact, e.g. 新洣和洛杉矶-外高桥26-9-29.xlsx row 12:
+    "Type:暂无 ... 1 3 PCE BALL BEARING ... Type:392-0063") becomes a real part.
+
+    Returns a new RowParts whose qty/unit/name_tokens are filled from the most
+    recent type_token; pure & stateless on sibling rows (operates on
+    rp.type_tokens[-1] only). If no qty is recoverable the input is returned
+    unchanged so _collect_packing_items can apply its other qty-less policies
+    (seq-only spill, SPARE KIT label).
+    """
+    if rp.qty is not None or not rp.type_tokens:
+        return rp
+    mt = _QM.find_qty(rp.type_tokens[-1])
+    if not mt[2]:
+        return rp
+    qty, unit = mt[0], mt[1]
+    after_qty = rp.type_tokens[-1][mt[2].end():]
+    before, tail = _split_type(after_qty)
+    name_seg = _trim_footer(before) if before else _trim_footer(after_qty)
+    name_seg = _clean_name(_strip_leading_field_labels(_clean(name_seg)))
+    new_name_tokens = [name_seg] if name_seg and not _is_irrelevant(name_seg) else []
+
+    new_type_tokens = list(rp.type_tokens)
+    if tail:
+        new_type_tokens[-1] = _trim_footer(tail)
+    else:
+        # nothing meaningful after the qty: keep the blob's pre-qty label tokens
+        # (Serial No value etc.) as type metadata
+        new_type_tokens[-1] = _trim_footer(rp.type_tokens[-1][: mt[2].start()])
+    return RowParts(qty=qty, unit=unit, name_tokens=new_name_tokens,
+                    type_tokens=new_type_tokens)
+
+
+def _dedupe(seq):
+    return dict.fromkeys(seq)
+
+# Kept as a thin wrapper for any external/legacy caller of _row_parts.
+def _row_parts(cells, exclude_cols=()):
+    """Back-compat: interpret one row then return the (qty, unit, name_parts,
+    type_parts) 4-tuple shape expected by older callers."""
+    rp = interpret_row(cells, exclude_cols)
+    return rp.qty, rp.unit, list(rp.name_tokens), list(rp.type_tokens)
 
 
 def _row_text(cells) -> str:
@@ -1321,8 +1381,10 @@ def _seq_row_code(cells, exclude_cols) -> str:
 
 
 def _stack_qty_only(v: str) -> bool:
-    return bool(_STACK_QTY_LINE_RE.fullmatch(v))
-    return False
+    """True if a cell value is a bare numeric qty (e.g. '1 3' or '10 10' from a
+    stacked/vertical-merge qty column) and thus should not be treated as a part
+    code by _seq_row_code."""
+    return bool(_STACK_QTY_LINE_RE.fullmatch(v.strip()))
 
 
 def _collect_packing_items(rows, start, end, exclude_cols, path, sheet_name, warn) -> list:
@@ -1330,39 +1392,38 @@ def _collect_packing_items(rows, start, end, exclude_cols, path, sheet_name, war
     i = start
     while i < end:
         cells = rows[i - 1]
-        qty, unit, name_parts, type_parts = _row_parts(cells, exclude_cols)
-        if qty is None:
-            # A seq-only line-item row (col1 bare number, no qty — the qty
-            # lives on a sibling row or the row carries only seq+code). Emit it
-            # as its own part with qty defaulted to 1, instead of silently
-            # skipping it (which previously dropped all such items and left
-            # them merged into the preceding qty row — e.g. the 6 Repair-Kit
-            # codes in 丰和海-烟台 Sheet2 collapsing to 1 part). Skip the header
-            # row itself (i == start) and rows that aren't genuine item rows.
-            if i > start and _seq_only_row(cells) and not _is_irrelevant(" ".join(name_parts)):
-                code = _seq_row_code(cells, exclude_cols) or " ".join(dict.fromkeys(name_parts))
-                items.append(Part(name=_trim_footer(code.strip(" -–—")), qty=1.0, unit="个", type=None))
+        rp = interpret_row(cells, exclude_cols)
+        if rp.qty is None:
+            # A qty-less row: apply the qty-less-as-new-item policies in order.
+            # (1) merged-cell Type: blob that hides a qty+name — pure per-row
+            # recovery (e.g. 新洣和洛杉矶-外高桥 row 12); (2) seq-only spill row
+            # (col1 bare number, identity in a far code column — e.g. the 6
+            # Repair-Kit codes in 丰和海-烟台 Sheet2); (3) standalone kit/spare
+            # label ('SPARE KIT 4', 丰和海-烟台 Sheet1).
+            rp = _recover_qtyless(rp)
+            if rp.qty is None:
+                joined_name = rp.assembled()[0] or ""
+                if joined_name and not _is_signature(joined_name) and _KIT_LABEL_RE.match(joined_name):
+                    items.append(Part(name=_trim_footer(joined_name), qty=1.0, unit="个", type=None))
+                    i += 1
+                    continue
+                if i > start and _seq_only_row(cells) and joined_name and not _is_irrelevant(joined_name):
+                    code = _seq_row_code(cells, exclude_cols) or joined_name
+                    items.append(Part(name=_trim_footer(code.strip(" -–—")), qty=1.0, unit="个", type=None))
+                    i += 1
+                    continue
+                # qty-less and not a recoverable kit/seq row -> skip (was a
+                # continuation line or header/footer). Advance without emitting.
                 i += 1
                 continue
-            # A standalone kit/spare-label row with no qty (e.g. 'SPARE KIT 4'
-            # in 丰和海-烟台 Sheet1). These carry no quantity in the sheet, so
-            # default qty to 1 (the same convention as the Chinese-header path)
-            # so the kit isn't silently dropped. Guarded to the kit-label form
-            # so Type:/Cus-Ref rows are not emitted as parts.
-            joined_name = " ".join(dict.fromkeys(name_parts)).strip(" -–—")
-            if (i > start and joined_name and not _is_irrelevant(joined_name)
-                    and not _is_signature(joined_name) and _KIT_LABEL_RE.match(joined_name)):
-                items.append(Part(name=_trim_footer(joined_name), qty=1.0, unit="个", type=None))
-                i += 1
-                continue
-            i += 1
-            continue
 
         j = i + 1
+        name_tokens = list(rp.name_tokens)
+        type_tokens = list(rp.type_tokens)
         while j < end:
             nxt_cells = rows[j - 1]
-            nqty, _, nname, ntype = _row_parts(nxt_cells, exclude_cols)
-            if nqty is not None:
+            nrp = interpret_row(nxt_cells, exclude_cols)
+            if nrp.qty is not None:
                 break
             # Stop merging continuation lines when we hit a standalone
             # seq-number row — it is a NEW line item, not a Type/spec note for
@@ -1370,14 +1431,27 @@ def _collect_packing_items(rows, start, end, exclude_cols, path, sheet_name, war
             # that belong to separate parts, not continuations of row 16).
             if _seq_only_row(nxt_cells):
                 break
+            # Type: blob recovery also applies to continuation rows (a qty-less
+            # following line may itself hold the qty+name inline).
+            nrp = _recover_qtyless(nrp)
+            if nrp.qty is not None:
+                break
             if _END_RE.search(_row_text(nxt_cells)):
                 break
-            name_parts.extend(nname)
-            type_parts.extend(ntype)
+            name_tokens.extend(nrp.name_tokens)
+            type_tokens.extend(nrp.type_tokens)
+            rp_recovered = _recover_qtyless(RowParts(qty=None, unit=None, name_tokens=name_tokens, type_tokens=type_tokens))
+            # if the merged tokens revealed a qty, adopt it and stop
+            if rp_recovered.qty is not None:
+                rp = rp_recovered
+                qty, unit = rp.qty, rp.unit
+                break
+            rp = RowParts(qty=rp.qty, unit=rp.unit, name_tokens=name_tokens, type_tokens=type_tokens)
             j += 1
+        qty, unit = rp.qty, rp.unit
 
-        name = " ".join(dict.fromkeys(p for p in name_parts if p)).strip(" -–—")
-        type_str = "; ".join(dict.fromkeys(t for t in type_parts if t)).strip(" -–—")
+        name = " ".join(dict.fromkeys(p for p in name_tokens if p)).strip(" -–—")
+        type_str = "; ".join(dict.fromkeys(t for t in type_tokens if t)).strip(" -–—")
         name = _trim_footer(name)
         type_str = _trim_footer(type_str)
         if not name and type_str and len(type_str) <= 60:
@@ -1387,7 +1461,7 @@ def _collect_packing_items(rows, start, end, exclude_cols, path, sheet_name, war
                 warn(f"{path.name}/{sheet_name} 第 {i} 行备件缺少名称（数量 {qty:g} {unit or '个'}）")
             name = "(未填写名称)"
         items.append(Part(name=name, qty=qty, unit=unit or "个", type=type_str or None))
-        i = j
+        i = j if j > i else i + 1
     return items
 
 
