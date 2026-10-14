@@ -759,6 +759,32 @@ def _parse_standard(sheet, mapping, header_row, path, warn) -> list:
         if cells[0].row <= header_row:
             continue
         raw_name = _cell_value(cells, name_col)
+        # Tolerate a header/data column offset: some Yuantong receipts (e.g.
+        # 丰和海-天津 Sheet3 'ITEMS QUANTITY DESCRIPTION ITEM ID') label a
+        # column one position right of where the value lands, leaving the
+        # header column empty in the data row while the value sits at col-1
+        # (e.g. DESCRIPTION header col 6, name value col 5). If the mapped name
+        # column is empty AND the previous column is *unlabeled* in the header
+        # row (no header token there -> it is a genuine data column shifted left,
+        # not the seq/total column which always bears a label), pull the value
+        # from col-1. Guarded to never fire when the name column already aligns.
+        if raw_name is None and name_col and name_col - 1 >= 1:
+            can_col = name_col - 1
+            header_cells = sheet.cell(header_row, can_col)
+            if header_cells.value is None and can_col not in mapping.values():
+                cand = _cell_value(cells, can_col)
+                if cand is not None:
+                    cand_clean = _clean(cand)
+                    if (
+                        cand_clean
+                        and not _QM.has_qty(cand_clean)
+                        and not _STACK_QTY_LINE_RE.match(cand_clean.strip())
+                        and not _is_signature(cand_clean)
+                        and not _is_irrelevant(cand_clean)
+                        and len(cand_clean) >= 2
+                        and re.search(r"[A-Za-z\u4e00-\u9fff]", cand_clean)
+                    ):
+                        raw_name = cand
         if raw_name is None:
             continue
 
@@ -1248,24 +1274,103 @@ def _find_end_of_listing(rows, start_idx, last_row) -> int:
     return last_row + 1
 
 
+_KIT_LABEL_RE = re.compile(r"^spare\s*kits?|spare\s*kit\s*\d+|^kit\s*\d+", re.IGNORECASE)
+
+
+def _seq_only_row(cells) -> bool:
+    """True when a row's first data cell is a bare sequence number (1.0, 2, 3.2...)
+    and the row carries NO quantity — i.e. a standalone line-item row that the
+    English packing scanner saw no qty on (qty lives on a sibling row, or the
+    row has only seq+code). Used by _collect_packing_items to stop merging
+    continuation lines into the previous item and instead emit this row as its
+    own part (qty defaults to 1)."""
+    for c in cells:
+        if c.value is None:
+            continue
+        v = _clean(c.value).strip()
+        if _STACK_QTY_LINE_RE.match(v):
+            return True
+        # first non-empty cell is the seq position; bail if it's not a bare number
+        return False
+    return False
+
+
+def _seq_row_code(cells, exclude_cols) -> str:
+    """Best-effort part-number/code for a seq-only line-item row.
+
+    Seq-only rows (col1 = '2.0', no qty) typically carry their identity in a
+    far column (e.g. col 14 '97005-2=97005'). _row_parts drops numeric/dash
+    codes via _is_irrelevant (tuned for the name column), so we read that code
+    directly. Returns the cleaned code, or the seq number itself if no code.
+    """
+    for c in cells:
+        if c.column in exclude_cols or c.value is None:
+            continue
+        v = _clean(c.value).strip()
+        # a code like '97005-2=97005', '97070-2.→97070', '97081.='
+        if re.search(r"[\d]", v) and len(v) >= 2 and not _stack_qty_only(v):
+            return v
+    # fallback: the seq number itself
+    for c in cells:
+        if c.value is None:
+            continue
+        v = _clean(c.value).strip()
+        if _STACK_QTY_LINE_RE.match(v):
+            return v
+    return ""
+
+
+def _stack_qty_only(v: str) -> bool:
+    return bool(_STACK_QTY_LINE_RE.fullmatch(v))
+    return False
+
+
 def _collect_packing_items(rows, start, end, exclude_cols, path, sheet_name, warn) -> list:
-    """Walk rows[start:end], grouping each qty-bearing row with its continuation
-    lines (Type/spec) until the next qty row or end."""
     items = []
     i = start
     while i < end:
         cells = rows[i - 1]
         qty, unit, name_parts, type_parts = _row_parts(cells, exclude_cols)
         if qty is None:
+            # A seq-only line-item row (col1 bare number, no qty — the qty
+            # lives on a sibling row or the row carries only seq+code). Emit it
+            # as its own part with qty defaulted to 1, instead of silently
+            # skipping it (which previously dropped all such items and left
+            # them merged into the preceding qty row — e.g. the 6 Repair-Kit
+            # codes in 丰和海-烟台 Sheet2 collapsing to 1 part). Skip the header
+            # row itself (i == start) and rows that aren't genuine item rows.
+            if i > start and _seq_only_row(cells) and not _is_irrelevant(" ".join(name_parts)):
+                code = _seq_row_code(cells, exclude_cols) or " ".join(dict.fromkeys(name_parts))
+                items.append(Part(name=_trim_footer(code.strip(" -–—")), qty=1.0, unit="个", type=None))
+                i += 1
+                continue
+            # A standalone kit/spare-label row with no qty (e.g. 'SPARE KIT 4'
+            # in 丰和海-烟台 Sheet1). These carry no quantity in the sheet, so
+            # default qty to 1 (the same convention as the Chinese-header path)
+            # so the kit isn't silently dropped. Guarded to the kit-label form
+            # so Type:/Cus-Ref rows are not emitted as parts.
+            joined_name = " ".join(dict.fromkeys(name_parts)).strip(" -–—")
+            if (i > start and joined_name and not _is_irrelevant(joined_name)
+                    and not _is_signature(joined_name) and _KIT_LABEL_RE.match(joined_name)):
+                items.append(Part(name=_trim_footer(joined_name), qty=1.0, unit="个", type=None))
+                i += 1
+                continue
             i += 1
             continue
 
         j = i + 1
         while j < end:
-            nqty, _, nname, ntype = _row_parts(rows[j - 1], exclude_cols)
+            nxt_cells = rows[j - 1]
+            nqty, _, nname, ntype = _row_parts(nxt_cells, exclude_cols)
             if nqty is not None:
                 break
-            if _END_RE.search(_row_text(rows[j - 1])):
+            # Stop merging continuation lines when we hit a standalone
+            # seq-number row — it is a NEW line item, not a Type/spec note for
+            # the current part (丰和海-烟台 Sheet2 rows 17-24 are seq-only codes
+            # that belong to separate parts, not continuations of row 16).
+            if _seq_only_row(nxt_cells):
+                break
+            if _END_RE.search(_row_text(nxt_cells)):
                 break
             name_parts.extend(nname)
             type_parts.extend(ntype)

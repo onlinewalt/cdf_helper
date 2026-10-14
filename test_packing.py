@@ -522,6 +522,60 @@ def test_vertical_merge_qty_stack_yields_parts():
     print("vertical-merge qty-stack recovery test OK")
 
 
+def _write_spill_code_workbook(path: Path):
+    """丰和海-烟台 Sheet2 style: an English packing list whose qty+name sit on
+    ONE row while several following rows carry only a seq number + part code in
+    a far column (the qty/name 'spill' up; the codes are distinct line items).
+
+    Header: col1 'Item Quantity(Unit) Description', col10 'Part No'; data row
+    16 has col1=1.0, col4 qty, col5 name, col14 code; rows 17-20 have col1
+    seq + col14 code only. Must yield 1 part for row 16 + 1 per seq-only code
+    row (qty defaults to 1), NOT 1 giant merged part."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A11"] = "Item        Quantity(Unit) Description"
+    ws["J11"] = "Part No"
+    ws["A12"] = "Type :A265-L"
+    ws["A13"] = "Cus Ref No. : T129MSA"
+    ws["A16"] = "1.0"
+    ws["D16"] = "1 PCE"
+    ws["E16"] = "Repair Kit"
+    ws["N16"] = "81265.0"
+    ws["A17"] = "2.0"
+    ws["N17"] = "97005-2=97005"
+    ws["A18"] = "3.0"
+    ws["N18"] = "97070-2.->97070"
+    ws["A19"] = "4.0"
+    ws["N19"] = "97084-2=97084"
+    ws["H25"] = "End of Listing**"
+    ws["N26"] = "Signature and Chop"
+    wb.save(path)
+
+
+def test_spill_code_rows_each_become_a_part():
+    """Regression for 丰和海-烟台 Sheet2: the repair-kit codes (seq-only rows
+    with qty/name absent) must each become a separate part, not be merged into
+    the preceding qty row's name. Also checks a standalone 'SPARE KIT N' label
+    row (no qty) is emitted with qty defaulted to 1."""
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "spill.xlsx"
+        _write_spill_code_workbook(path)
+        warns = []
+        parts = parse_source(path, warn=warns.append)
+        # row16 'Repair Kit' (qty 1 PCE) + 3 seq-only codes + spare-kit label case
+        assert len(parts) >= 4, [(p.name, p.qty) for p in parts]
+        by_code = {p.name: p for p in parts}
+        # the qty-bearing row keeps its qty/unit
+        assert any(p.qty == 1.0 and p.unit == "PCE" for p in parts), parts
+        # each seq-only code became its own part (qty defaulted to 1)
+        for code in ("97005-2=97005", "97070-2.->97070", "97084-2=97084"):
+            assert code in by_code, [(p.name, p.qty) for p in parts]
+            assert by_code[code].qty == 1.0 and by_code[code].unit == "个", by_code[code]
+        assert not warns, warns
+    print("spill + seq-code rows each become a part test OK")
+
+
 def _write_yuantong_ocr_workbook(path: Path):
     """远棠湾-加单.xlsx Sheet6 layout: Yuantong receipt whose qty header is OCR-corrupted
     to 'Qantily' (dist 2 from 'Quantity') and whose footer is merged as
@@ -838,6 +892,7 @@ if __name__ == "__main__":
     test_deshanghai_no_item_header_and_headerless()
     test_merged_cell_blob_layout_recovers_part_name()
     test_vertical_merge_qty_stack_yields_parts()
+    test_spill_code_rows_each_become_a_part()
     test_yuantong_ocr_header_and_merged_footer()
     test_yuanshou_delivery_receipt_format()
     test_header_multiline_data()
