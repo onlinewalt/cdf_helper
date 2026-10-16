@@ -75,9 +75,17 @@ def test_write_part_row_writes_values_and_formulas():
     assert ws.cell(r, 2).value == "阀门 DN50"           # include_spec True -> name + spec
     assert ws.cell(r, 3).value == 3                     # qty
     assert ws.cell(r, 4).value == "只"
-    assert ws.cell(r, 5).value == 1.5
-    assert ws.cell(r, 6).value == 200.0
-    assert ws.cell(r, 7).value == amount_formula(r)
+    # weight: template column is 重量(KG) per-ROW total (its total row does
+    # =SUM(E$3...)), and Part.weight is per-unit — so the writer emits qty*weight.
+    assert ws.cell(r, 5).value == 1.5 * 3
+    assert ws.cell(r, 6).value == 200.0                  # unit price (per-unit)
+    assert ws.cell(r, 7).value == amount_formula(r)     # amount formula
+
+    # None weight -> blank cell (must not raise), preserving pre-multiplication
+    # behaviour for parts the AI left unfilled.
+    part_no_w = Part(name="阀门", qty=3, unit="只", weight=None)
+    _write_part_row(ws, r + 1, part_no_w, styles, include_spec=True)
+    assert ws.cell(r + 1, 5).value is None
 
 
 def test_write_total_row_writes_marker_and_sums():
