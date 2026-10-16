@@ -164,7 +164,7 @@ def _write_part_row(ws, row, part, data_styles, include_spec):
     ws.cell(row, NAME_COL).value = _display_name(part, include_spec)
     ws.cell(row, QTY_COL).value = part.qty
     ws.cell(row, UNIT_COL).value = part.unit
-    ws.cell(row, WEIGHT_COL).value = part.weight
+    ws.cell(row, WEIGHT_COL).value = part.weight * part.qty     # --- weight is per unit, multiply by qty
     ws.cell(row, PRICE_COL).value = part.price
     ws.cell(row, AMOUNT_COL).value = amount_formula(row)
     _apply_styles(ws, row, data_styles)
