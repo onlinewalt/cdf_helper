@@ -45,6 +45,31 @@ _HEADER_ALIASES = {
 # acceptable, but the five below must be present.
 _REQUIRED_FIELDS = {"备件名称", "数量", "单位", "重量(KG)", "单价/RMB", "金额RMB"}
 
+# --- Unit translation seam ---------------------------------------------------
+# English packing-list units (PCE/SET/PC/EA) are translated to the Chinese unit
+# the 报关清单's 单位 column expects; Chinese units pass through; unknown tokens
+# pass through unchanged; None/empty -> None (the writer applies its "个"
+# default). Applied at output time (_write_part_row) so the parser's Part.unit
+# keeps source fidelity and existing parser tests are unaffected. Pure &
+# stateless — testable directly without parsing a workbook.
+_UNIT_ALIASES = {
+    "pcs": "件", "pce": "件", "pc": "个", "pc.": "个",
+    "ea": "个", "each": "个", "set": "套", "set.": "套",
+    "件": "件", "套": "套", "个": "个", "只": "只", "包": "包",
+    "kg": "KG", "kgs": "KG", "g": "g", "gs": "g",
+}
+
+
+def normalize_unit(u):
+    """Translate an English unit word (PCE/SET/PC/EA) to its Chinese equivalent
+    (件/套/个); pass Chinese units through; ``None``/empty -> ``None``."""
+    if u is None:
+        return None
+    s = str(u).strip()
+    if not s:
+        return None
+    return _UNIT_ALIASES.get(s.lower(), s)
+
 
 @dataclass
 class TemplateLayout:
@@ -268,7 +293,7 @@ def _write_part_row(ws, row, part, data_styles, layout, include_spec):
     ws.cell(row, layout.seq_col).value = seq_num_formula(layout, row)
     ws.cell(row, layout.name_col).value = _display_name(part, include_spec)
     ws.cell(row, layout.qty_col).value = part.qty
-    ws.cell(row, layout.unit_col).value = part.unit
+    ws.cell(row, layout.unit_col).value = normalize_unit(part.unit) or "个"
     ws.cell(row, layout.weight_col).value = (part.weight * part.qty) if part.weight is not None else None
     ws.cell(row, layout.price_col).value = part.price
     ws.cell(row, layout.amount_col).value = amount_formula(layout, row)

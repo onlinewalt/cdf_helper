@@ -908,4 +908,31 @@ if __name__ == "__main__":
     test_vessel_lookup()
     test_packed_real_file_if_present()
     test_real_file_if_present()
-    print("\nALL PARSER TESTS PASSED")
+
+
+def test_normalize_unit_translates_english_to_chinese():
+    """Unit normalization seam: English packing-list units (PCE/SET/PC/EA) map to
+    the Chinese unit the 报关清单 expects; Chinese units pass through; unknown
+    tokens pass through unchanged; None/empty -> None (caller applies '个')."""
+    from cdf_helper.generator import normalize_unit
+    assert normalize_unit(None) is None
+    assert normalize_unit("") is None
+    assert normalize_unit("   ") is None
+    # English -> Chinese
+    assert normalize_unit("PCE") == "件"
+    assert normalize_unit("PCS") == "件"
+    assert normalize_unit("SET") == "套"
+    assert normalize_unit("PC") == "个"
+    assert normalize_unit("EA") == "个"
+    assert normalize_unit("EACH") == "个"
+    # case-insensitive, whitespace-tolerant
+    assert normalize_unit(" pce ") == "件"
+    assert normalize_unit("pcs") == "件"
+    # Chinese pass-through
+    assert normalize_unit("件") == "件"
+    assert normalize_unit("套") == "套"
+    assert normalize_unit("只") == "只"  # in-source Chinese unit, untouched
+    # unknown -> unchanged
+    assert normalize_unit("BOX") == "BOX"
+    print("normalize_unit translation test OK")
+print("\nALL PARSER TESTS PASSED")

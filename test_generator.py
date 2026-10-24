@@ -98,6 +98,29 @@ def test_write_part_row_writes_values_and_formulas():
     assert ws.cell(r + 1, 5).value is None
 
 
+def test_write_part_row_translates_units_on_output():
+    """Unit translation seam (output): an English-packed unit (PCE/SET/PC/EA)
+    on a Part is translated to the Chinese 单位 the report expects; a Chinese
+    unit passes through; None -> default '个'."""
+    tpl = _template_path()
+    wb = load_workbook(tpl, data_only=False)
+    ws = wb["Sheet1"]
+    r = FIRST_DATA_ROW
+    L = _std_layout()
+    styles = _style_row_template(ws, FIRST_DATA_ROW)
+    for col in range(1, 8):
+        ws.cell(r, col).value = None
+    for unit_in, unit_out in [("PCE", "件"), ("SET", "套"), ("PC", "个"), ("EA", "个")]:
+        part = Part(name="X", qty=1, unit=unit_in)
+        _write_part_row(ws, r, part, styles, layout=L, include_spec=False)
+        assert ws.cell(r, L.unit_col).value == unit_out, (unit_in, unit_out)
+    # Chinese unit passes through; None -> 个
+    for u, expect in [("只", "只"), ("件", "件"), (None, "个")]:
+        part = Part(name="X", qty=1, unit=u)
+        _write_part_row(ws, r, part, styles, layout=L, include_spec=False)
+        assert ws.cell(r, L.unit_col).value == expect, (u, expect)
+
+
 def test_write_total_row_writes_marker_and_sums():
     """_write_total_row exercises the total-row logic in isolation."""
     tpl = _template_path()
