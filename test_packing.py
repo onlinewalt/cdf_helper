@@ -885,6 +885,37 @@ def test_find_packing_header_whitebox():
     print("find_packing_header white-box test OK")
 
 
+def test_find_end_of_listing_defensive_on_inflated_last_row():
+    """Regression: _find_end_of_listing must not IndexError when the caller's
+    last_row exceeds len(rows) (a sheet whose reported dimension row-count is
+    inflated by stray formatting / a cached dimension). The function clamps to
+    the actual row list so rows[idx-1] stays in bounds — a real uploaded file
+    triggered 'IndexError: list index out of range' on POST /generate."""
+    from cdf_helper.parser import _find_end_of_listing, Cell
+    # a small 4-row sheet; simulate the inflated-dimension sheet by passing a
+    # last_row far beyond len(rows) (as sheet.last_row could report).
+    fake_rows = [
+        [Cell("hdr", 1, 1), Cell(None, 2, 1), Cell(None, 3, 1)],
+        [Cell(None, 1, 2), Cell("1 PCE", 2, 2), Cell(None, 3, 2)],
+        [Cell(None, 1, 3), Cell("Type:X", 2, 3), Cell(None, 3, 3)],
+        [Cell(None, 1, 4), Cell("** End of Listing **", 2, 4), Cell(None, 3, 4)],
+    ]
+    # no genuine footer before the end -> returns last_row+1, never crashes
+    # (inflated last_row must be clamped so rows[idx-1] stays in bounds)
+    r = _find_end_of_listing(fake_rows, 1, len(fake_rows) + 2000)
+    assert 1 <= r <= len(fake_rows) + 1  # clamped, no out-of-range IndexError
+    # a footer present at a real row is still found
+    r2 = _find_end_of_listing(fake_rows, 1, 4)
+    assert r2 == 4
+    # the pure clamp: real rows carry NO footer, but the caller passes an
+    # inflated last_row — the OLD code IndexError'd (rows[idx-1] out of range),
+    # the clamped code returns len(rows)+1.
+    no_footer = fake_rows[:-1]
+    r3 = _find_end_of_listing(no_footer, 1, len(no_footer) + 2000)
+    assert r3 == len(no_footer) + 1
+    print("find-end-of-listing defensive clamp test OK")
+
+
 
 if __name__ == "__main__":
     test_synthetic()

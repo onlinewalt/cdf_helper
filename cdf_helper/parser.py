@@ -1325,6 +1325,11 @@ def _find_end_of_listing(rows, start_idx, last_row) -> int:
     data (the marker is embedded in a cell), not the footer.
     Returns ``last_row + 1`` if no genuine footer is found.
     """
+    # `last_row` (the sheet's reported last row) can exceed len(rows) when the
+    # worksheet has a phantom dimension (cells written then cleared, or a stray
+    # format beyond the data) — clamp to the actual number of rows so the loop
+    # can't index rows[idx-1] out of range.
+    last_row = min(last_row, len(rows))
     for idx in range(start_idx, last_row + 1):
         text = _row_text(rows[idx - 1])
         if _END_RE.search(text):
